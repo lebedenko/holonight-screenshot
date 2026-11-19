@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QColor>
 #include <QColorSpace>
 #include <QImage>
 #include <QList>
@@ -32,6 +33,8 @@ class CaptureFrame {
   [[nodiscard]] const QImage& image() const { return image_; }
   [[nodiscard]] QColorSpace colorSpace() const { return image_.colorSpace(); }
   [[nodiscard]] const std::optional<DesktopMapping>& desktopMapping() const { return mapping_; }
+
+  [[nodiscard]] QColor sampleSrgb(QPointF desktopPoint) const;
 
  private:
   QImage image_;

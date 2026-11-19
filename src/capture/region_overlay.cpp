@@ -12,6 +12,8 @@
 
 #include <algorithm>
 
+static void initializePreviewResource() { Q_INIT_RESOURCE(region_preview); }
+
 namespace screenshot {
 namespace {
 
@@ -43,6 +45,7 @@ class FrozenOutput : public QQuickPaintedItem {
 
   Q_SIGNAL void copyRequested();
   Q_SIGNAL void saveRequested();
+  Q_SIGNAL void cancelRequested();
   Q_SIGNAL void toolRequested(int tool);
   Q_SIGNAL void colorRequested(const QColor& color);
   Q_SIGNAL void undoRequested();
@@ -60,6 +63,9 @@ class FrozenOutput : public QQuickPaintedItem {
       painter->restore();
     }
 
+    if (property("pointPicker").toBool()) {
+      return;
+    }
     const auto selection = selection_.rectangle().translated(-origin_);
 
     QPainterPath shade;
@@ -89,8 +95,8 @@ class FrozenOutput : public QQuickPaintedItem {
 
 }  // namespace
 
-RegionOverlay::RegionOverlay(CaptureFrame frame, GrimAcquisition& acquisition)
-    : frame_(std::move(frame)), acquisition_(acquisition) {
+RegionOverlay::RegionOverlay(CaptureFrame frame, GrimAcquisition& acquisition, Mode mode)
+    : mode_(mode), frame_(std::move(frame)), acquisition_(acquisition) {
   layoutTimer_.setInterval(500);
   connect(&layoutTimer_, &QTimer::timeout, this, [this] {
     if (layoutCheck_ == LayoutCheck::Idle) {
@@ -100,6 +106,11 @@ RegionOverlay::RegionOverlay(CaptureFrame frame, GrimAcquisition& acquisition)
   });
   connect(&acquisition_, &GrimAcquisition::layoutVerified, this, [this] {
     if (layoutCheck_ == LayoutCheck::Confirming) {
+      if (pendingAction_ == Action::PickColor) {
+        const auto color = frame_.sampleSrgb(pickedPoint_);
+        finish({}, color.isValid() ? QString() : QStringLiteral("Could not sample the selected pixel."), color);
+        return;
+      }
       auto crop = selection_.confirm(frame_);
       if (crop.isNull()) {
         finish({}, QStringLiteral("Could not render the selected screenshot."));
@@ -123,6 +134,11 @@ RegionOverlay::RegionOverlay(CaptureFrame frame, GrimAcquisition& acquisition)
 }
 
 void RegionOverlay::open() {
+  static const bool resourceReady = [] {
+    initializePreviewResource();
+    return true;
+  }();
+  Q_UNUSED(resourceReady);
   const auto screens = QGuiApplication::screens();
   const auto& mapping = frame_.desktopMapping();
   const auto layoutChanged = [this] { finish({}, QStringLiteral("Output layout changed during region selection.")); };
@@ -139,7 +155,8 @@ void RegionOverlay::open() {
     surfaces_.push_back({*match, output, std::make_unique<LayerSurfaceHost>()});
   }
 
-  qmlRegisterType<FrozenOutput>("Holonight.Screenshot", 1, 0, "FrozenOutput");
+  static const auto typeId = qmlRegisterType<FrozenOutput>("Holonight.Screenshot", 1, 0, "FrozenOutput");
+  Q_UNUSED(typeId);
   connect(qGuiApp, &QGuiApplication::screenAdded, this, layoutChanged);
   connect(qGuiApp, &QGuiApplication::screenRemoved, this, layoutChanged);
   connect(qGuiApp, &QGuiApplication::primaryScreenChanged, this, layoutChanged);
@@ -177,8 +194,12 @@ void RegionOverlay::open() {
     }
     item->setFrame(frame_, surface.output.logicalBounds);
     item->setProperty("primaryOutput", screen == QGuiApplication::primaryScreen());
+    item->setProperty("portalMode", mode_ != Mode::Cli);
+    item->setProperty("pointPicker", mode_ == Mode::PickColor);
+    connect(item, &FrozenOutput::cancelRequested, this, &RegionOverlay::cancel, Qt::QueuedConnection);
     connect(item, &FrozenOutput::copyRequested, this, [this] { confirm(Action::Copy); });
-    connect(item, &FrozenOutput::saveRequested, this, [this] { confirm(Action::Save); });
+    connect(item, &FrozenOutput::saveRequested, this,
+            [this] { confirm(mode_ == Mode::Share ? Action::Share : Action::Save); });
     connect(item, &FrozenOutput::toolRequested, this, [this](int tool) {
       selection_.setTool(static_cast<RegionSelection::Tool>(tool));
       redraw();
@@ -236,15 +257,16 @@ bool RegionOverlay::eventFilter(QObject* watched, QEvent* event) {
     case QEvent::KeyPress: {
       const auto* key = static_cast<QKeyEvent*>(event);
       if (key->key() == Qt::Key_Escape) {
-        selection_.cancel();
-        finish();
+        cancel();
       } else if (key->keyCombination() == QKeyCombination(Qt::ControlModifier, Qt::Key_Z)) {
         undo();
-      } else if (key->keyCombination() == QKeyCombination(Qt::ControlModifier, Qt::Key_C)) {
+      } else if (mode_ == Mode::Cli && key->keyCombination() == QKeyCombination(Qt::ControlModifier, Qt::Key_C)) {
         confirm(Action::Copy);
       } else if (key->keyCombination() == QKeyCombination(Qt::ControlModifier, Qt::Key_S) ||
                  key->key() == Qt::Key_Enter || key->key() == Qt::Key_Return) {
-        confirm(Action::Save);
+        if (mode_ != Mode::PickColor) {
+          confirm(mode_ == Mode::Share ? Action::Share : Action::Save);
+        }
       }
       return true;
     }
@@ -265,6 +287,11 @@ bool RegionOverlay::eventFilter(QObject* watched, QEvent* event) {
           if (actions->contains(local)) {
             return false;
           }
+        }
+        if (mode_ == Mode::PickColor) {
+          pickedPoint_ = point;
+          confirm(Action::PickColor);
+          return true;
         }
         // Wayland keeps delivering the drag to the surface of the button press.
         if (selection_.begin(point, frame_)) {
@@ -290,7 +317,7 @@ bool RegionOverlay::eventFilter(QObject* watched, QEvent* event) {
 }
 
 void RegionOverlay::confirm(Action action) {
-  if (finished_ || !ready_ || pendingAction_ || !selection_.canConfirm(frame_)) {
+  if (finished_ || !ready_ || pendingAction_ || (action != Action::PickColor && !selection_.canConfirm(frame_))) {
     return;
   }
   pendingAction_ = action;
@@ -323,7 +350,12 @@ void RegionOverlay::redraw() {
   }
 }
 
-void RegionOverlay::finish(QImage crop, QString error) {
+void RegionOverlay::cancel() {
+  selection_.cancel();
+  finish();
+}
+
+void RegionOverlay::finish(QImage crop, QString error, QColor color) {
   if (finished_) {
     return;
   }
@@ -339,6 +371,8 @@ void RegionOverlay::finish(QImage crop, QString error) {
   }
   if (!error.isEmpty()) {
     emit failed(error);
+  } else if (color.isValid()) {
+    emit colorPicked(color);
   } else if (!crop.isNull() && pendingAction_) {
     emit selected(*pendingAction_, crop);
   } else {

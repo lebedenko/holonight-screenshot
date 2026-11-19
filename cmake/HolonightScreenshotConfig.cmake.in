@@ -1,0 +1,4 @@
+include(CMakeFindDependencyMacro)
+find_dependency(Qt6 6.11 COMPONENTS Core Gui QuickControls2)
+find_dependency(HolonightQt CONFIG COMPONENTS Wayland)
+include("${CMAKE_CURRENT_LIST_DIR}/HolonightScreenshotTargets.cmake")

@@ -5,6 +5,8 @@ import QtQuick.Controls
 FrozenOutput {
     id: preview
 
+    property bool portalMode: false
+    property bool pointPicker: false
     property bool primaryOutput: false
     property bool hasCrop: false
     property bool actionsAvailable: false
@@ -19,11 +21,13 @@ FrozenOutput {
         anchors.bottom: parent.bottom
         anchors.bottomMargin: 24
         spacing: 8
-        visible: preview.primaryOutput && preview.hasCrop
+        visible: preview.primaryOutput && (preview.hasCrop || preview.portalMode)
 
         Row {
             anchors.horizontalCenter: parent.horizontalCenter
             spacing: 8
+
+            visible: preview.hasCrop && !preview.pointPicker
 
             Repeater {
                 model: [qsTr("Select"), qsTr("Pen"), qsTr("Arrow"), qsTr("Rectangle")]
@@ -50,12 +54,24 @@ FrozenOutput {
             spacing: 8
 
             Repeater {
-                model: [
-                    { label: qsTr("Red"), color: "red" },
-                    { label: qsTr("Yellow"), color: "yellow" },
-                    { label: qsTr("White"), color: "white" },
-                    { label: qsTr("Black"), color: "black" }
-                ]
+                model: preview.hasCrop ? [
+                    {
+                        label: qsTr("Red"),
+                        color: "red"
+                    },
+                    {
+                        label: qsTr("Yellow"),
+                        color: "yellow"
+                    },
+                    {
+                        label: qsTr("White"),
+                        color: "white"
+                    },
+                    {
+                        label: qsTr("Black"),
+                        color: "black"
+                    }
+                ] : []
 
                 Button {
                     id: swatch
@@ -82,15 +98,23 @@ FrozenOutput {
             }
 
             Button {
+                visible: !preview.portalMode
                 text: qsTr("Copy")
                 enabled: preview.actionsAvailable
                 onClicked: preview.copyRequested()
             }
 
             Button {
-                text: qsTr("Save")
+                visible: !preview.pointPicker && (!preview.portalMode || preview.hasCrop)
+                text: preview.portalMode ? qsTr("Share") : qsTr("Save")
                 enabled: preview.actionsAvailable
                 onClicked: preview.saveRequested()
+            }
+
+            Button {
+                visible: preview.portalMode
+                text: qsTr("Cancel")
+                onClicked: preview.cancelRequested()
             }
         }
     }

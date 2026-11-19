@@ -1,0 +1,5 @@
+<RCC>
+  <qresource prefix="/screenshot">
+    <file>RegionPreview.qml</file>
+  </qresource>
+</RCC>

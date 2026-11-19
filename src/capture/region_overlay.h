@@ -19,14 +19,17 @@ class GrimAcquisition;
 class RegionOverlay final : public QObject {
   Q_OBJECT
  public:
-  RegionOverlay(CaptureFrame frame, GrimAcquisition& acquisition);
+  enum class Mode { Cli, Share, PickColor };
+  RegionOverlay(CaptureFrame frame, GrimAcquisition& acquisition, Mode mode = Mode::Cli);
+  void cancel();
   void open();
 
-  enum class Action { Copy, Save };
+  enum class Action { Copy, Save, Share, PickColor };
   Q_ENUM(Action)
 
  signals:
   void selected(Action action, const QImage& crop);
+  void colorPicked(const QColor& color);
   void canceled();
   void failed(const QString& reason);
 
@@ -36,7 +39,7 @@ class RegionOverlay final : public QObject {
   void redraw();
   void undo();
   void confirm(Action action);
-  void finish(QImage crop = {}, QString error = {});
+  void finish(QImage crop = {}, QString error = {}, QColor color = {});
 
   struct Surface {
     QScreen* screen;
@@ -44,6 +47,8 @@ class RegionOverlay final : public QObject {
     std::unique_ptr<Holonight::Wayland::LayerSurfaceHost> host;
   };
 
+  Mode mode_;
+  QPointF pickedPoint_;
   CaptureFrame frame_;
   GrimAcquisition& acquisition_;
   RegionSelection selection_;

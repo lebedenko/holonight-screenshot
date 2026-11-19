@@ -54,6 +54,31 @@ struct Request {
 class CaptureTest final : public QObject {
   Q_OBJECT
  private slots:
+  void samplesMixedScaleOutputsInSrgb() {
+    DesktopMapping mapping{
+        {
+            {QStringLiteral("left"), QRectF(-2, 0, 2, 2), OutputTransform::Normal, 1, QRect(0, 0, 4, 4)},
+            {QStringLiteral("right"), QRectF(0, 0, 2, 2), OutputTransform::Normal, 2, QRect(4, 0, 4, 4)},
+        },
+        2};
+    QImage image(8, 4, QImage::Format_RGB32);
+    image.fill(Qt::black);
+    image.setPixelColor(3, 1, Qt::red);
+    image.setPixelColor(4, 1, Qt::green);
+    const CaptureFrame untagged(image, mapping);
+    QCOMPARE(untagged.sampleSrgb(QPointF(-0.25, 0.75)), QColor(Qt::red));
+    QCOMPARE(untagged.sampleSrgb(QPointF(0, 0.75)), QColor(Qt::green));
+    QVERIFY(!untagged.sampleSrgb(QPointF(2, 0.75)).isValid());
+
+    image.setColorSpace(QColorSpace::SRgbLinear);
+    image.setPixelColor(4, 1, QColor(128, 64, 0));
+    const CaptureFrame tagged(image, mapping);
+    const auto color = tagged.sampleSrgb(QPointF(0, 0.75));
+    QVERIFY(qAbs(color.red() - 188) <= 1);
+    QVERIFY(qAbs(color.green() - 137) <= 1);
+    QCOMPARE(color.blue(), 0);
+  }
+
   void timerStartsOneAcquisition_data() {
     QTest::addColumn<int>("milliseconds");
     QTest::newRow("immediate") << 0;

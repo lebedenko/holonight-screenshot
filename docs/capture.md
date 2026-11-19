@@ -39,3 +39,22 @@ The tests deliver timer expiry directly and use a colored grid to check frame de
 Fake helpers exercise the live provider stages, including a rotated mixed-scale layout, fractional canvas clipping, PNG decoding, child errors and deadlines, layout changes and cancellation. The [README](../README.md) gives a temporary Hyprland shortcut for checking that the delayed capture preserves an open menu and a stationary tooltip while the source application keeps focus.
 
 When the portal becomes a second consumer, extract capture and selection into an installed package and test both consumers against it. The portal milestone owns authorization before acquisition and advertising the Screenshot interface once Screenshot and PickColor both work.
+
+## Installed capture package
+
+Install this project to expose `HolonightScreenshot::Capture` through
+`find_package(HolonightScreenshot CONFIG REQUIRED)`. The target provides the
+cancellable controller, Hyprland layout and Grim acquisition, the frozen
+desktop overlay, the annotation renderer, and PNG encoding. Consumers need
+Qt 6.11 or newer and the installed HolonightQt Wayland component.
+
+The CLI handles arguments, clipboard transfer, and the save dialog. Its
+installed-package build uses `-DSCREENSHOT_USE_INSTALLED_CAPTURE=ON` and a
+`CMAKE_PREFIX_PATH` pointing to the provider installation.
+
+The portal’s area overlay confirms with **Share** and uses the same crop and
+annotation compositor as the CLI. The point picker samples the frozen
+desktop in logical coordinates. It maps the click into the compositor’s
+capture-scale raster, checks the layout again before returning the pixel,
+and uses the image profile to convert to sRGB. Untagged pixels are treated
+as sRGB. Both portal modes support Escape and **Cancel**.
