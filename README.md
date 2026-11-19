@@ -14,7 +14,9 @@ task build PRESET=release
 
 Full-desktop capture requires `--output PATH`. Capture starts immediately unless you pass `--delay-ms N` (0–2147483647 milliseconds). Add `--include-cursor` to draw the pointer. The destination is replaced atomically after a successful capture. Failures are reported on stderr and return a nonzero exit status.
 
-Add `--region` to select an area from one frozen capture. Drag with the left mouse button, including across outputs, and release to review the selection. Drag again to replace it. The primary overlay offers **Copy** (Ctrl+C) and **Save** (Ctrl+S, Enter, or Return). Copy requires `wl-copy` from the `wl-clipboard` package and places a PNG on the Wayland clipboard. Save writes directly when you pass `--output PATH`, or opens the desktop’s configured PNG save dialog when you omit it. On HoloNight, this uses the configured FileChooser portal when available.
+Add `--region` to select an area from one frozen capture. Drag with the left mouse button, including across outputs, and release to review the selection. Use **Select** to replace the crop and clear its marks. Choose **Pen**, **Arrow**, or **Rectangle**, then drag from inside the crop to draw. A Pen click makes a dot. Red is the default, with yellow, white, and black also available. **Undo** or Ctrl+Z removes the most recent mark.
+
+After releasing the drag, the primary overlay offers **Copy** (Ctrl+C) and **Save** (Ctrl+S, Enter, or Return). Both include the committed marks. Copy requires `wl-copy` from the `wl-clipboard` package and places a PNG on the Wayland clipboard. Save writes directly when you pass `--output PATH`, or opens the desktop’s configured PNG save dialog when you omit it. On HoloNight, this uses the configured FileChooser portal when available.
 
 Copy and Save end the capture and exit with status 0 on success. Press Esc or dismiss the save dialog to cancel with status 2. Copy, cancellation, and failures leave an existing destination intact.
 

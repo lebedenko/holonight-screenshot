@@ -34,6 +34,7 @@ class RegionOverlay final : public QObject {
   bool eventFilter(QObject* watched, QEvent* event) override;
   void configured();
   void redraw();
+  void undo();
   void confirm(Action action);
   void finish(QImage crop = {}, QString error = {});
 

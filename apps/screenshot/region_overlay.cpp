@@ -24,50 +24,67 @@ class FrozenOutput : public QQuickPaintedItem {
     origin_ = bounds.topLeft();
     const auto& mapping = *frame.desktopMapping();
     const auto start = mapping.rasterEdge(bounds.topLeft());
+    rasterStart_ = start;
+    scale_ = mapping.captureScale;
     const auto end = mapping.rasterEdge(bounds.bottomRight());
     // Use the continuous raster edges to align fractional-scale outputs.
     // Limit the source to the actual canvas without stretching its last pixel.
     const auto clipped = QRectF(start, end).intersected(QRectF(frame.image().rect()));
     target_ = QRectF((clipped.topLeft() - start) / mapping.captureScale, clipped.size() / mapping.captureScale);
     source_ = clipped;
-    image_ = frame.image();
+    frame_ = frame;
     update();
   }
 
-  void setSelection(const QRectF& desktopSelection) {
-    selection_ = desktopSelection.translated(-origin_);
+  void setSelection(const RegionSelection& selection) {
+    selection_ = selection;
     update();
   }
 
   Q_SIGNAL void copyRequested();
   Q_SIGNAL void saveRequested();
+  Q_SIGNAL void toolRequested(int tool);
+  Q_SIGNAL void colorRequested(const QColor& color);
+  Q_SIGNAL void undoRequested();
 
   void paint(QPainter* painter) override {
     const QRectF bounds = boundingRect();
     painter->fillRect(bounds, Qt::black);
-    painter->drawImage(target_, image_, source_);
+    if (frame_) {
+      painter->drawImage(target_, frame_->image(), source_);
+      painter->save();
+      painter->setClipRect(target_);
+      painter->scale(1 / scale_, 1 / scale_);
+      painter->translate(-rasterStart_);
+      selection_.paintAnnotations(*painter, *frame_, true);
+      painter->restore();
+    }
+
+    const auto selection = selection_.rectangle().translated(-origin_);
 
     QPainterPath shade;
     shade.addRect(bounds);
-    const auto visibleSelection = selection_.intersected(bounds);
+    const auto visibleSelection = selection.intersected(bounds);
     if (!visibleSelection.isEmpty()) {
       shade.addRect(visibleSelection);
     }
     painter->fillPath(shade, QColor(0, 0, 0, 145));
-    if (!selection_.isEmpty()) {
+    if (!selection.isEmpty()) {
       painter->setPen(QPen(Qt::black, 3));
-      painter->drawRect(selection_);
+      painter->drawRect(selection);
       painter->setPen(QPen(Qt::white, 1));
-      painter->drawRect(selection_);
+      painter->drawRect(selection);
     }
   }
 
  private:
-  QImage image_;
+  std::optional<CaptureFrame> frame_;
+  QPointF rasterStart_;
+  qreal scale_ = 1;
   QPointF origin_;
   QRectF source_;
   QRectF target_;
-  QRectF selection_;
+  RegionSelection selection_;
 };
 
 }  // namespace
@@ -162,6 +179,15 @@ void RegionOverlay::open() {
     item->setProperty("primaryOutput", screen == QGuiApplication::primaryScreen());
     connect(item, &FrozenOutput::copyRequested, this, [this] { confirm(Action::Copy); });
     connect(item, &FrozenOutput::saveRequested, this, [this] { confirm(Action::Save); });
+    connect(item, &FrozenOutput::toolRequested, this, [this](int tool) {
+      selection_.setTool(static_cast<RegionSelection::Tool>(tool));
+      redraw();
+    });
+    connect(item, &FrozenOutput::colorRequested, this, [this](const QColor& color) {
+      selection_.setColor(color);
+      redraw();
+    });
+    connect(item, &FrozenOutput::undoRequested, this, &RegionOverlay::undo);
     view->installEventFilter(this);
     connect(
         view, &QQuickWindow::sceneGraphError, this,
@@ -212,6 +238,8 @@ bool RegionOverlay::eventFilter(QObject* watched, QEvent* event) {
       if (key->key() == Qt::Key_Escape) {
         selection_.cancel();
         finish();
+      } else if (key->keyCombination() == QKeyCombination(Qt::ControlModifier, Qt::Key_Z)) {
+        undo();
       } else if (key->keyCombination() == QKeyCombination(Qt::ControlModifier, Qt::Key_C)) {
         confirm(Action::Copy);
       } else if (key->keyCombination() == QKeyCombination(Qt::ControlModifier, Qt::Key_S) ||
@@ -234,14 +262,15 @@ bool RegionOverlay::eventFilter(QObject* watched, QEvent* event) {
         const auto* actions = view->rootObject()->property("actionBar").value<QQuickItem*>();
         if (actions && actions->isVisible()) {
           const auto local = actions->mapFromScene(mouse->position());
-          if (actions->childAt(local.x(), local.y())) {
+          if (actions->contains(local)) {
             return false;
           }
         }
         // Wayland keeps delivering the drag to the surface of the button press.
-        dragView_ = view;
-        selection_.begin(point);
-        redraw();
+        if (selection_.begin(point, frame_)) {
+          dragView_ = view;
+          redraw();
+        }
       } else if (view == dragView_ && event->type() == QEvent::MouseMove) {
         selection_.move(point);
         redraw();
@@ -261,7 +290,7 @@ bool RegionOverlay::eventFilter(QObject* watched, QEvent* event) {
 }
 
 void RegionOverlay::confirm(Action action) {
-  if (finished_ || !ready_ || pendingAction_ || selection_.cropRect(frame_).isEmpty()) {
+  if (finished_ || !ready_ || pendingAction_ || !selection_.canConfirm(frame_)) {
     return;
   }
   pendingAction_ = action;
@@ -273,12 +302,24 @@ void RegionOverlay::confirm(Action action) {
   }
 }
 
+void RegionOverlay::undo() {
+  if (!pendingAction_) {
+    selection_.undo();
+    redraw();
+  }
+}
+
 void RegionOverlay::redraw() {
-  const bool actionsAvailable = !pendingAction_ && !selection_.cropRect(frame_).isEmpty();
+  const bool hasCrop = !selection_.cropRect(frame_).isEmpty();
+  const bool actionsAvailable = !pendingAction_ && selection_.canConfirm(frame_);
   for (const auto& surface : surfaces_) {
     auto* item = static_cast<FrozenOutput*>(surface.host->rootObject());
-    item->setSelection(selection_.rectangle());
+    item->setSelection(selection_);
+    item->setProperty("hasCrop", hasCrop);
     item->setProperty("actionsAvailable", actionsAvailable);
+    item->setProperty("undoAvailable", actionsAvailable && selection_.canUndo());
+    item->setProperty("activeTool", static_cast<int>(selection_.tool()));
+    item->setProperty("activeColor", selection_.color());
   }
 }
 

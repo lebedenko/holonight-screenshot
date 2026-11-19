@@ -100,7 +100,7 @@ exec /bin/cat "$FIXTURE/frame.png"
     QCOMPARE(frame.image().pixelColor(1919, 2), QColor(Qt::red));
     QCOMPARE(frame.image().pixelColor(1920, 2), QColor(Qt::blue));
     RegionSelection selection;
-    selection.begin({0.4, -1.1});
+    selection.begin({0.4, -1.1}, frame);
     selection.release({-0.6, -1.6});
     const auto crop = selection.confirm(frame);
     QCOMPARE(crop.size(), QSize(2, 1));
