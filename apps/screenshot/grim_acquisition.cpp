@@ -126,6 +126,13 @@ void GrimAcquisition::start(CursorPolicy cursor) {
   run(QStringLiteral("hyprctl"), layoutArguments, layoutTimeoutMs);
 }
 
+void GrimAcquisition::verifyLayout() {
+  if (stage_ == Stage::Done && !layout_.isEmpty() && process_.state() == QProcess::NotRunning) {
+    stage_ = Stage::Verifying;
+    run(QStringLiteral("hyprctl"), layoutArguments, layoutTimeoutMs);
+  }
+}
+
 void GrimAcquisition::cancel() {
   pendingFailure_.clear();
   stop();
@@ -149,6 +156,7 @@ void GrimAcquisition::run(const QString& program, const QStringList& arguments, 
 
 void GrimAcquisition::fail(const QString& reason) {
   if (stage_ != Stage::Done) {
+    layoutFailure_ = stage_ == Stage::Verifying;
     pendingFailure_ = reason;
     stop();
     if (process_.state() == QProcess::NotRunning) {
@@ -160,7 +168,11 @@ void GrimAcquisition::fail(const QString& reason) {
 void GrimAcquisition::publishFailure() {
   const auto reason = std::exchange(pendingFailure_, {});
   if (!reason.isEmpty()) {
-    emit failed(reason);
+    if (layoutFailure_) {
+      emit layoutVerificationFailed(reason);
+    } else {
+      emit failed(reason);
+    }
   }
 }
 
@@ -204,7 +216,13 @@ void GrimAcquisition::finished(int exitCode, QProcess::ExitStatus status) {
   }
 
   if (layout->identity != layout_) {
-    fail(QStringLiteral("Hyprland monitor layout changed during capture."));
+    fail(stage_ == Stage::Verifying ? QStringLiteral("Hyprland monitor layout changed during region selection.")
+                                    : QStringLiteral("Hyprland monitor layout changed during capture."));
+    return;
+  }
+  if (stage_ == Stage::Verifying) {
+    stage_ = Stage::Done;
+    emit layoutVerified();
     return;
   }
   const auto image = QImage::fromData(png_, "PNG");

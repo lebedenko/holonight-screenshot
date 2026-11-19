@@ -1,8 +1,8 @@
 # HoloNight Screenshot
 
-A standalone Qt command-line utility that captures the full Hyprland desktop to a PNG without opening a window. Live capture requires `hyprctl` and `grim` on PATH in the Hyprland session. The raster geometry follows grim 1.5.0.
+A standalone Qt command-line utility that captures a Hyprland desktop to a PNG. The default saves the full desktop without opening a window. Live capture requires `hyprctl` and `grim` on PATH in the Hyprland session. The raster geometry follows grim 1.5.0.
 
-Build on the host with CMake 3.25+, Ninja, Task, a C++23 compiler and Qt 6.11+ (Core, Gui and Test for the development preset).
+Build on the host with CMake 3.25+, Ninja, Task, a C++23 compiler and Qt 6.11+ (Core, Gui, Quick, Wayland Client, and Test for the development preset). Install the Wayland component of HoloNight Qt so CMake can resolve `HolonightQt::Wayland`. If several installs are present, set `HolonightQt_DIR` to the package directory containing the Wayland component.
 
 ```sh
 task build
@@ -14,15 +14,17 @@ task build PRESET=release
 
 Pass `--output PATH` to choose the destination. Capture starts immediately unless you pass `--delay-ms N` (0–2147483647 milliseconds). Add `--include-cursor` to draw the pointer. The destination is replaced atomically after a successful capture. Failures are reported on stderr and return a nonzero exit status.
 
+Add `--region` to select an area from one frozen capture. Drag with the left mouse button, including across outputs, and release to review the selection. Drag again to replace it. Press Enter or Return to save, or Esc to dismiss the overlays and exit with status 2. Cancellation and failures leave an existing destination intact.
+
 The default asks grim to exclude the pointer. On the tested Hyprland 0.57.2 session, the pointer appeared in both the tooltip capture and the equivalent direct grim capture without `-c`.
 
 To try a delayed capture on Hyprland with Lua configuration, replace the executable and destination with absolute paths and choose a free key combination.
 
 ```sh
-hyprctl eval 'hl.bind("SUPER + SHIFT + F10", hl.dsp.exec_cmd("/path/to/holonight-screenshot --delay-ms 3000 --output /tmp/holonight-desktop.png"))'
+hyprctl eval 'hl.bind("SUPER + SHIFT + F10", hl.dsp.exec_cmd("/path/to/holonight-screenshot --region --delay-ms 3000 --output /tmp/holonight-region.png"))'
 ```
 
-Press the shortcut and open a menu within three seconds, then repeat while hovering over a control until its tooltip appears. Inspect each PNG before taking the next capture, and check that the source application keeps focus. Remove the temporary binding after the check.
+Press the shortcut and open a menu within three seconds, then repeat while hovering over a control until its tooltip appears. Check that the source application keeps focus until the overlay appears. Drag around the frozen menu or tooltip and press Enter. Inspect each PNG before taking the next capture. Remove the temporary binding after the check.
 
 ```sh
 hyprctl eval 'hl.unbind("SUPER + SHIFT + F10")'

@@ -1,4 +1,5 @@
 #include "grim_acquisition.h"
+#include "region_selection.h"
 
 #include <QFile>
 #include <QFileInfo>
@@ -98,6 +99,14 @@ exec /bin/cat "$FIXTURE/frame.png"
     QCOMPARE(mapping.rasterEdge({2, 2}), QPointF(1923, 7.5));
     QCOMPARE(frame.image().pixelColor(1919, 2), QColor(Qt::red));
     QCOMPARE(frame.image().pixelColor(1920, 2), QColor(Qt::blue));
+    RegionSelection selection;
+    selection.begin({0.4, -1.1});
+    selection.release({-0.6, -1.6});
+    const auto crop = selection.confirm(frame);
+    QCOMPARE(crop.size(), QSize(2, 1));
+    QCOMPARE(crop.pixelColor(0, 0), QColor(Qt::red));
+    QCOMPARE(crop.pixelColor(1, 0), QColor(Qt::blue));
+    QCOMPARE(crop.colorSpace(), frame.colorSpace());
   }
 
   void rejectsFailedCapture_data() {

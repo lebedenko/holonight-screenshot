@@ -1,0 +1,3 @@
+import Holonight.Screenshot
+
+FrozenOutput {}

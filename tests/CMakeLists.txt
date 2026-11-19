@@ -6,6 +6,11 @@ add_test(NAME cli COMMAND ${CMAKE_COMMAND} -DAPP=$<TARGET_FILE:holonight-screens
 set_tests_properties(capture cli PROPERTIES TIMEOUT 10)
 
 add_executable(grim-test grim_test.cpp)
-target_link_libraries(grim-test PRIVATE screenshot-grim Qt6::Test)
+target_link_libraries(grim-test PRIVATE screenshot-grim screenshot-selection Qt6::Test)
 add_test(NAME grim COMMAND grim-test)
 set_tests_properties(grim PROPERTIES TIMEOUT 30)
+
+add_executable(region-test region_test.cpp)
+target_link_libraries(region-test PRIVATE screenshot-selection Qt6::Test)
+add_test(NAME region COMMAND region-test)
+set_tests_properties(region PROPERTIES TIMEOUT 10)
