@@ -1,11 +1,11 @@
 #include "capture_controller.h"
 #include "grim_acquisition.h"
+#include "png_output.h"
 #include "region_overlay.h"
 
+#include <QApplication>
 #include <QCommandLineParser>
 #include <QCoreApplication>
-#include <QGuiApplication>
-#include <QSaveFile>
 #include <QTextStream>
 
 #include <cstdlib>
@@ -17,14 +17,6 @@ namespace {
 int reportFailure(const QString& reason) {
   QTextStream(stderr) << reason << Qt::endl;
   return EXIT_FAILURE;
-}
-
-int savePng(const QString& path, const QImage& image) {
-  QSaveFile file(path);
-  if (!file.open(QIODevice::WriteOnly) || !image.save(&file, "PNG") || !file.commit()) {
-    return reportFailure(QStringLiteral("Could not save PNG to %1: %2").arg(path, file.errorString()));
-  }
-  return EXIT_SUCCESS;
 }
 
 struct Options {
@@ -52,8 +44,11 @@ std::optional<Options> parseOptions(int argc, char** argv) {
   parser.process(app);
 
   const auto path = parser.value(output);
-  if (parser.values(output).size() != 1 || path.isEmpty() || !parser.positionalArguments().isEmpty()) {
-    reportFailure(QStringLiteral("Specify exactly one --output PATH and no positional arguments."));
+  if (parser.values(output).size() > 1 || (parser.isSet(output) && path.isEmpty()) ||
+      (!parser.isSet(region) && path.isEmpty()) || !parser.positionalArguments().isEmpty()) {
+    reportFailure(
+        QStringLiteral("Specify --output PATH exactly once for desktop capture, or optionally with --region. "
+                       "Positional arguments are invalid."));
     return std::nullopt;
   }
   bool validDelay = false;
@@ -73,12 +68,13 @@ int capture(QCoreApplication& app, const Options& options) {
   screenshot::GrimAcquisition acquisition;
   std::unique_ptr<screenshot::RegionOverlay> overlay;
   screenshot::CaptureController controller(acquisition, std::chrono::milliseconds(options.delayMs), options.cursor);
+  const auto complete = [&](const QString& error) { app.exit(error.isEmpty() ? EXIT_SUCCESS : reportFailure(error)); };
   const auto fail = [&](const QString& reason) { app.exit(reportFailure(reason)); };
   QObject::connect(&controller, &screenshot::CaptureController::failed, &app, fail);
   QObject::connect(
       &controller, &screenshot::CaptureController::captured, &app, [&](const screenshot::CaptureFrame& frame) {
         if (!options.region) {
-          app.exit(savePng(options.path, frame.image()));
+          complete(screenshot::savePng(options.path, frame.image()));
           return;
         }
         overlay = std::make_unique<screenshot::RegionOverlay>(frame, acquisition);
@@ -87,7 +83,19 @@ int capture(QCoreApplication& app, const Options& options) {
             overlay.get(), &screenshot::RegionOverlay::canceled, &app, [&] { app.exit(2); }, Qt::QueuedConnection);
         QObject::connect(
             overlay.get(), &screenshot::RegionOverlay::selected, &app,
-            [&](const QImage& crop) { app.exit(savePng(options.path, crop)); }, Qt::QueuedConnection);
+            [&](screenshot::RegionOverlay::Action action, const QImage& crop) {
+              if (action == screenshot::RegionOverlay::Action::Copy) {
+                complete(screenshot::copyPng(crop));
+                return;
+              }
+              const auto path = options.path.isEmpty() ? screenshot::choosePngPath() : options.path;
+              if (path.isEmpty()) {
+                app.exit(2);
+                return;
+              }
+              complete(screenshot::savePng(path, crop));
+            },
+            Qt::QueuedConnection);
         overlay->open();
       });
   return app.exec();
@@ -114,7 +122,7 @@ int main(int argc, char** argv) {
   if (platform.isEmpty()) {
     platform = "wayland";
   }
-  // QGuiApplication aborts when it cannot connect to the platform display.
+  // QApplication aborts when it cannot connect to the platform display.
   // Check the Wayland connection so a missing session is a normal CLI failure.
   if (platform.startsWith("wayland")) {
     // A supplied WAYLAND_SOCKET is a single-use connection owned by Qt.
@@ -130,8 +138,9 @@ int main(int argc, char** argv) {
   // The layer-surface host assigns the Wayland role itself. Honor its window
   // flag so Qt does not create an xdg-toplevel role for the same surface.
   qputenv("QT_WAYLAND_USE_BYPASSWINDOWMANAGERHINT", "1");
-  // Keep the Wayland display alive through destruction of the layer-shell singleton.
-  static QGuiApplication app(appArgc, appArgv);
-  app.setQuitOnLastWindowClosed(false);
-  return capture(app, *options);
+  // The layer-shell singleton needs the display during static destruction.
+  // QApplication itself must outlive Qt Widgets' static state during that teardown.
+  static auto* const app = new QApplication(appArgc, appArgv);
+  app->setQuitOnLastWindowClosed(false);
+  return capture(*app, *options);
 }

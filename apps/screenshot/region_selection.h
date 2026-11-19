@@ -11,6 +11,7 @@ class RegionSelection {
   void release(QPointF point);
   void cancel();
   [[nodiscard]] QRectF rectangle() const;
+  [[nodiscard]] QRect cropRect(const CaptureFrame& frame) const;
   [[nodiscard]] QImage confirm(const CaptureFrame& frame) const;
 
  private:

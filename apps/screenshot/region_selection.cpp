@@ -31,7 +31,7 @@ void RegionSelection::cancel() {
 
 QRectF RegionSelection::rectangle() const { return QRectF(start_, end_).normalized(); }
 
-QImage RegionSelection::confirm(const CaptureFrame& frame) const {
+QRect RegionSelection::cropRect(const CaptureFrame& frame) const {
   const auto& mapping = frame.desktopMapping();
   const auto selection = rectangle();
   if (dragging_ || canceled_ || selection.isEmpty() || !mapping ||
@@ -45,7 +45,12 @@ QImage RegionSelection::confirm(const CaptureFrame& frame) const {
   const QRectF pixels(QPointF(std::floor(start.x()), std::floor(start.y())),
                       QPointF(std::ceil(end.x()), std::ceil(end.y())));
   const auto clipped = pixels.intersected(QRectF(frame.image().rect()));
-  return clipped.isEmpty() ? QImage() : frame.image().copy(clipped.toRect());
+  return clipped.toRect();
+}
+
+QImage RegionSelection::confirm(const CaptureFrame& frame) const {
+  const auto pixels = cropRect(frame);
+  return pixels.isEmpty() ? QImage() : frame.image().copy(pixels);
 }
 
 }  // namespace screenshot

@@ -39,6 +39,9 @@ class FrozenOutput : public QQuickPaintedItem {
     update();
   }
 
+  Q_SIGNAL void copyRequested();
+  Q_SIGNAL void saveRequested();
+
   void paint(QPainter* painter) override {
     const QRectF bounds = boundingRect();
     painter->fillRect(bounds, Qt::black);
@@ -80,11 +83,16 @@ RegionOverlay::RegionOverlay(CaptureFrame frame, GrimAcquisition& acquisition)
   });
   connect(&acquisition_, &GrimAcquisition::layoutVerified, this, [this] {
     if (layoutCheck_ == LayoutCheck::Confirming) {
-      finish(std::move(pendingCrop_));
-    } else if (pendingCrop_.isNull()) {
+      auto crop = selection_.confirm(frame_);
+      if (crop.isNull()) {
+        finish({}, QStringLiteral("Could not render the selected screenshot."));
+      } else {
+        finish(std::move(crop));
+      }
+    } else if (!pendingAction_) {
       layoutCheck_ = LayoutCheck::Idle;
     } else {
-      // A poll started before Enter. Check again against the confirmed selection.
+      // A poll started before confirmation. Check again against the confirmed selection.
       layoutCheck_ = LayoutCheck::Confirming;
       acquisition_.verifyLayout();
     }
@@ -151,6 +159,9 @@ void RegionOverlay::open() {
       return;
     }
     item->setFrame(frame_, surface.output.logicalBounds);
+    item->setProperty("primaryOutput", screen == QGuiApplication::primaryScreen());
+    connect(item, &FrozenOutput::copyRequested, this, [this] { confirm(Action::Copy); });
+    connect(item, &FrozenOutput::saveRequested, this, [this] { confirm(Action::Save); });
     view->installEventFilter(this);
     connect(
         view, &QQuickWindow::sceneGraphError, this,
@@ -197,20 +208,15 @@ bool RegionOverlay::eventFilter(QObject* watched, QEvent* event) {
       finish({}, QStringLiteral("A screenshot overlay closed or its output changed."));
       return true;
     case QEvent::KeyPress: {
-      const auto key = static_cast<QKeyEvent*>(event)->key();
-      if (key == Qt::Key_Escape) {
+      const auto* key = static_cast<QKeyEvent*>(event);
+      if (key->key() == Qt::Key_Escape) {
         selection_.cancel();
         finish();
-      } else if (ready_ && pendingCrop_.isNull() && (key == Qt::Key_Enter || key == Qt::Key_Return)) {
-        auto crop = selection_.confirm(frame_);
-        if (!crop.isNull()) {
-          pendingCrop_ = std::move(crop);
-          layoutTimer_.stop();
-          if (layoutCheck_ == LayoutCheck::Idle) {
-            layoutCheck_ = LayoutCheck::Confirming;
-            acquisition_.verifyLayout();
-          }
-        }
+      } else if (key->keyCombination() == QKeyCombination(Qt::ControlModifier, Qt::Key_C)) {
+        confirm(Action::Copy);
+      } else if (key->keyCombination() == QKeyCombination(Qt::ControlModifier, Qt::Key_S) ||
+                 key->key() == Qt::Key_Enter || key->key() == Qt::Key_Return) {
+        confirm(Action::Save);
       }
       return true;
     }
@@ -218,13 +224,20 @@ bool RegionOverlay::eventFilter(QObject* watched, QEvent* event) {
     case QEvent::MouseButtonDblClick:
     case QEvent::MouseMove:
     case QEvent::MouseButtonRelease: {
-      if (!ready_ || !pendingCrop_.isNull()) {
+      if (!ready_ || pendingAction_) {
         return true;
       }
       const auto* mouse = static_cast<QMouseEvent*>(event);
       const auto point = surface->output.logicalBounds.topLeft() + mouse->position();
       if ((event->type() == QEvent::MouseButtonPress || event->type() == QEvent::MouseButtonDblClick) &&
           mouse->button() == Qt::LeftButton && !dragView_) {
+        const auto* actions = view->rootObject()->property("actionBar").value<QQuickItem*>();
+        if (actions && actions->isVisible()) {
+          const auto local = actions->mapFromScene(mouse->position());
+          if (actions->childAt(local.x(), local.y())) {
+            return false;
+          }
+        }
         // Wayland keeps delivering the drag to the surface of the button press.
         dragView_ = view;
         selection_.begin(point);
@@ -237,6 +250,8 @@ bool RegionOverlay::eventFilter(QObject* watched, QEvent* event) {
         selection_.release(point);
         dragView_.clear();
         redraw();
+      } else if (!dragView_) {
+        return false;
       }
       return true;
     }
@@ -245,9 +260,25 @@ bool RegionOverlay::eventFilter(QObject* watched, QEvent* event) {
   }
 }
 
+void RegionOverlay::confirm(Action action) {
+  if (finished_ || !ready_ || pendingAction_ || selection_.cropRect(frame_).isEmpty()) {
+    return;
+  }
+  pendingAction_ = action;
+  redraw();
+  layoutTimer_.stop();
+  if (layoutCheck_ == LayoutCheck::Idle) {
+    layoutCheck_ = LayoutCheck::Confirming;
+    acquisition_.verifyLayout();
+  }
+}
+
 void RegionOverlay::redraw() {
+  const bool actionsAvailable = !pendingAction_ && !selection_.cropRect(frame_).isEmpty();
   for (const auto& surface : surfaces_) {
-    static_cast<FrozenOutput*>(surface.host->rootObject())->setSelection(selection_.rectangle());
+    auto* item = static_cast<FrozenOutput*>(surface.host->rootObject());
+    item->setSelection(selection_.rectangle());
+    item->setProperty("actionsAvailable", actionsAvailable);
   }
 }
 
@@ -267,8 +298,8 @@ void RegionOverlay::finish(QImage crop, QString error) {
   }
   if (!error.isEmpty()) {
     emit failed(error);
-  } else if (!crop.isNull()) {
-    emit selected(crop);
+  } else if (!crop.isNull() && pendingAction_) {
+    emit selected(*pendingAction_, crop);
   } else {
     emit canceled();
   }

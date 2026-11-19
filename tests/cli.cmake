@@ -30,7 +30,9 @@ unset(ENV{DISPLAY})
 unset(ENV{HYPRLAND_INSTANCE_SIGNATURE})
 check_cli(0 "--region" --region --help)
 check_cli(0 "holonight-screenshot [0-9]" --region --version)
-check_cli(1 "--output PATH" --region)
+check_cli(1 "--output PATH" --region --output=)
+check_cli(1 "--output PATH" --region --output a --output b)
+check_cli(1 "must be an integer" --region --delay-ms=-1)
 
 set(destination "${helpers}/existing.png")
 file(WRITE "${destination}" "existing data")
@@ -42,6 +44,7 @@ endif()
 
 # Offscreen makes region startup deterministic while exercising acquisition and overlay failure.
 set(ENV{QT_QPA_PLATFORM} offscreen)
+check_cli(1 "invalid PNG" --region)
 check_cli(1 "invalid PNG" --region --output "${destination}")
 file(WRITE "${helpers}/grim" "#!/bin/sh\necho iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC | /usr/bin/base64 -d\n")
 check_cli(1 "Output layout changed" --region --output "${destination}")

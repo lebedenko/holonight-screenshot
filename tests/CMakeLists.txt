@@ -14,3 +14,8 @@ add_executable(region-test region_test.cpp)
 target_link_libraries(region-test PRIVATE screenshot-selection Qt6::Test)
 add_test(NAME region COMMAND region-test)
 set_tests_properties(region PROPERTIES TIMEOUT 10)
+
+add_executable(png-output-test png_output_test.cpp)
+target_link_libraries(png-output-test PRIVATE screenshot-output Qt6::Test)
+add_test(NAME png-output COMMAND png-output-test)
+set_tests_properties(png-output PROPERTIES TIMEOUT 15 ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORMTHEME=")

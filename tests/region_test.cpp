@@ -14,8 +14,10 @@ class RegionTest final : public QObject {
     selection.begin({1.8, 1.9});
     selection.move({0.8, 0.6});
     QCOMPARE(selection.rectangle(), QRectF(QPointF(0.8, 0.6), QPointF(1.8, 1.9)));
+    QVERIFY(selection.cropRect(frame).isEmpty());
     QVERIFY(selection.confirm(frame).isNull());
     selection.release({0.8, 0.6});
+    QCOMPARE(selection.cropRect(frame).size(), QSize(2, 3));
     QCOMPARE(selection.confirm(frame).size(), QSize(2, 3));
 
     selection.begin({2, 1});
@@ -36,6 +38,7 @@ class RegionTest final : public QObject {
       }
       selection.cancel();
       QVERIFY(selection.rectangle().isEmpty());
+      QVERIFY(selection.cropRect(frame).isEmpty());
       QVERIFY(selection.confirm(frame).isNull());
     }
   }
@@ -43,12 +46,15 @@ class RegionTest final : public QObject {
   void ignoresEmptyAndGapOnlySelections() {
     const auto frame = createFrame();
     RegionSelection selection;
+    QVERIFY(selection.cropRect(frame).isEmpty());
     QVERIFY(selection.confirm(frame).isNull());
     selection.begin({1, 1});
     selection.release({1, 2});
+    QVERIFY(selection.cropRect(frame).isEmpty());
     QVERIFY(selection.confirm(frame).isNull());
     selection.begin({3, 0});
     selection.release({4, 2});
+    QVERIFY(selection.cropRect(frame).isEmpty());
     QVERIFY(selection.confirm(frame).isNull());
   }
 

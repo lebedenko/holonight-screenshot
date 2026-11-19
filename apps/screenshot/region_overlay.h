@@ -22,8 +22,11 @@ class RegionOverlay final : public QObject {
   RegionOverlay(CaptureFrame frame, GrimAcquisition& acquisition);
   void open();
 
+  enum class Action { Copy, Save };
+  Q_ENUM(Action)
+
  signals:
-  void selected(const QImage& crop);
+  void selected(Action action, const QImage& crop);
   void canceled();
   void failed(const QString& reason);
 
@@ -31,6 +34,7 @@ class RegionOverlay final : public QObject {
   bool eventFilter(QObject* watched, QEvent* event) override;
   void configured();
   void redraw();
+  void confirm(Action action);
   void finish(QImage crop = {}, QString error = {});
 
   struct Surface {
@@ -46,7 +50,7 @@ class RegionOverlay final : public QObject {
   QPointer<QQuickView> dragView_;
   QTimer timeout_;
   QTimer layoutTimer_;
-  QImage pendingCrop_;
+  std::optional<Action> pendingAction_;
   enum class LayoutCheck { Idle, Polling, Confirming };
   LayoutCheck layoutCheck_ = LayoutCheck::Idle;
   bool ready_ = false;
