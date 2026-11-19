@@ -1,0 +1,38 @@
+function(check_cli expected_status expected_text)
+  execute_process(COMMAND "${APP}" ${ARGN} RESULT_VARIABLE status
+    OUTPUT_VARIABLE output ERROR_VARIABLE error TIMEOUT 3)
+  if(NOT status STREQUAL expected_status OR NOT "${output}${error}" MATCHES "${expected_text}")
+    message(FATAL_ERROR "${APP} ${ARGN} returned ${status}: ${output}${error}")
+  endif()
+endfunction()
+
+check_cli(0 "--version" --help)
+check_cli(0 "holonight-screenshot [0-9]" --version)
+check_cli(1 "--output PATH")
+check_cli(1 "--output PATH" --output=)
+check_cli(1 "--output PATH" --output a --output b)
+check_cli(1 "--output PATH" --output a extra)
+check_cli(1 "must be an integer" --output a --delay-ms=-1)
+check_cli(1 "must be an integer" --output a --delay-ms=2147483648)
+check_cli(1 "must be an integer" --output a --delay-ms=0.5)
+
+set(helpers "${CMAKE_CURRENT_BINARY_DIR}/cli-helpers")
+file(MAKE_DIRECTORY "${helpers}")
+file(WRITE "${helpers}/hyprctl" [=[#!/bin/sh
+echo '[{"id":0,"name":"test","width":1,"height":1,"x":0,"y":0,"transform":0,"scale":1,"disabled":false,"dpmsStatus":true,"mirrorOf":"none"}]'
+]=])
+file(WRITE "${helpers}/grim" "#!/bin/sh\necho invalid-png\n")
+file(CHMOD "${helpers}/hyprctl" "${helpers}/grim" PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE)
+set(ENV{PATH} "${helpers}")
+unset(ENV{WAYLAND_DISPLAY})
+unset(ENV{HYPRLAND_INSTANCE_SIGNATURE})
+check_cli(0 "--version" --help)
+check_cli(0 "holonight-screenshot [0-9]" --version)
+
+set(destination "${helpers}/existing.png")
+file(WRITE "${destination}" "existing data")
+check_cli(1 "invalid PNG" --output "${destination}" --delay-ms 0)
+file(READ "${destination}" contents)
+if(NOT contents STREQUAL "existing data")
+  message(FATAL_ERROR "Failed capture changed the existing destination")
+endif()

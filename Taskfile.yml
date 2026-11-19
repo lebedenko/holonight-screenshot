@@ -1,0 +1,14 @@
+version: '3'
+vars:
+  PRESET: '{{default "dev" .PRESET}}'
+tasks:
+  build:
+    cmds:
+      - cmake --preset {{.PRESET}}
+      - cmake --build --preset {{.PRESET}}
+  test:
+    cmds:
+      - task: build
+        vars:
+          PRESET: dev
+      - ctest --preset dev {{.CLI_ARGS}}

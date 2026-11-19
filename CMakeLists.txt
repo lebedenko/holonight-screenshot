@@ -1,0 +1,17 @@
+cmake_minimum_required(VERSION 3.25)
+project(holonight-screenshot VERSION 0.1.0 LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+find_package(Qt6 6.11 REQUIRED COMPONENTS Core Gui)
+qt_standard_project_setup(REQUIRES 6.11)
+
+add_subdirectory(src/capture)
+add_subdirectory(apps/screenshot)
+option(BUILD_TESTING "Build capture and command-line tests" OFF)
+if(BUILD_TESTING)
+  enable_testing()
+  find_package(Qt6 6.11 REQUIRED COMPONENTS Test)
+  add_subdirectory(tests)
+endif()
