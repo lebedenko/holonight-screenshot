@@ -1,10 +1,13 @@
 import Holonight.Screenshot
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls as Controls
 
 FrozenOutput {
     id: preview
 
+    property string appName
+    property bool desktop: false
+    property bool targetChoice: false
     property bool portalMode: false
     property bool pointPicker: false
     property bool primaryOutput: false
@@ -17,36 +20,75 @@ FrozenOutput {
 
     Column {
         id: buttons
+
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.bottom: parent.bottom
         anchors.bottomMargin: 24
         spacing: 8
         visible: preview.primaryOutput && (preview.hasCrop || preview.portalMode)
 
+        Controls.Label {
+            anchors.horizontalCenter: parent.horizontalCenter
+            visible: preview.portalMode
+            textFormat: Text.PlainText
+            width: Math.min(implicitWidth, preview.width - 48)
+            wrapMode: Text.Wrap
+            padding: 8
+            color: "white"
+            text: preview.pointPicker ? qsTr("Click a pixel to share its color with %1.").arg(preview.appName) : preview.desktop ? qsTr("Share your desktop with %1?").arg(preview.appName) : qsTr("Select an area to share with %1.").arg(preview.appName)
+
+            background: Rectangle {
+                color: "#242424"
+                radius: 4
+            }
+
+        }
+
         Row {
             anchors.horizontalCenter: parent.horizontalCenter
             spacing: 8
+            visible: preview.targetChoice
 
+            Controls.Button {
+                text: qsTr("Area")
+                highlighted: !preview.desktop
+                onClicked: preview.desktopRequested(false)
+            }
+
+            Controls.Button {
+                text: qsTr("Desktop")
+                highlighted: preview.desktop
+                onClicked: preview.desktopRequested(true)
+            }
+
+        }
+
+        Row {
+            anchors.horizontalCenter: parent.horizontalCenter
+            spacing: 8
             visible: preview.hasCrop && !preview.pointPicker
 
             Repeater {
                 model: [qsTr("Select"), qsTr("Pen"), qsTr("Arrow"), qsTr("Rectangle")]
 
-                Button {
+                Controls.Button {
                     required property int index
                     required property string modelData
+
                     text: modelData
                     highlighted: preview.activeTool === index
                     enabled: preview.actionsAvailable
                     onClicked: preview.toolRequested(index)
                 }
+
             }
 
-            Button {
+            Controls.Button {
                 text: qsTr("Undo")
                 enabled: preview.undoAvailable
                 onClicked: preview.undoRequested()
             }
+
         }
 
         Row {
@@ -54,29 +96,26 @@ FrozenOutput {
             spacing: 8
 
             Repeater {
-                model: preview.hasCrop ? [
-                    {
-                        label: qsTr("Red"),
-                        color: "red"
-                    },
-                    {
-                        label: qsTr("Yellow"),
-                        color: "yellow"
-                    },
-                    {
-                        label: qsTr("White"),
-                        color: "white"
-                    },
-                    {
-                        label: qsTr("Black"),
-                        color: "black"
-                    }
-                ] : []
+                model: preview.hasCrop ? [{
+                    "label": qsTr("Red"),
+                    "color": "red"
+                }, {
+                    "label": qsTr("Yellow"),
+                    "color": "yellow"
+                }, {
+                    "label": qsTr("White"),
+                    "color": "white"
+                }, {
+                    "label": qsTr("Black"),
+                    "color": "black"
+                }] : []
 
-                Button {
+                Controls.Button {
                     id: swatch
+
                     required property var modelData
                     readonly property color swatchColor: modelData.color
+
                     text: modelData.label
                     highlighted: preview.activeColor === swatchColor
                     enabled: preview.actionsAvailable
@@ -85,6 +124,7 @@ FrozenOutput {
 
                     Rectangle {
                         id: indicator
+
                         anchors.left: parent.left
                         anchors.leftMargin: 8
                         anchors.verticalCenter: parent.verticalCenter
@@ -94,28 +134,33 @@ FrozenOutput {
                         border.color: "#808080"
                         radius: 2
                     }
+
                 }
+
             }
 
-            Button {
+            Controls.Button {
                 visible: !preview.portalMode
                 text: qsTr("Copy")
                 enabled: preview.actionsAvailable
                 onClicked: preview.copyRequested()
             }
 
-            Button {
-                visible: !preview.pointPicker && (!preview.portalMode || preview.hasCrop)
-                text: preview.portalMode ? qsTr("Share") : qsTr("Save")
+            Controls.Button {
+                visible: !preview.pointPicker
+                text: preview.desktop ? qsTr("Share Desktop") : preview.portalMode ? qsTr("Share") : qsTr("Save")
                 enabled: preview.actionsAvailable
                 onClicked: preview.saveRequested()
             }
 
-            Button {
+            Controls.Button {
                 visible: preview.portalMode
                 text: qsTr("Cancel")
                 onClicked: preview.cancelRequested()
             }
+
         }
+
     }
+
 }

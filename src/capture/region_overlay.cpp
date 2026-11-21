@@ -38,11 +38,17 @@ class FrozenOutput : public QQuickPaintedItem {
     update();
   }
 
+  void clearFrame() {
+    frame_.reset();
+    update();
+  }
+
   void setSelection(const RegionSelection& selection) {
     selection_ = selection;
     update();
   }
 
+  Q_SIGNAL void desktopRequested(bool desktop);
   Q_SIGNAL void copyRequested();
   Q_SIGNAL void saveRequested();
   Q_SIGNAL void cancelRequested();
@@ -63,7 +69,7 @@ class FrozenOutput : public QQuickPaintedItem {
       painter->restore();
     }
 
-    if (property("pointPicker").toBool()) {
+    if (property("pointPicker").toBool() || property("desktop").toBool()) {
       return;
     }
     const auto selection = selection_.rectangle().translated(-origin_);
@@ -96,7 +102,14 @@ class FrozenOutput : public QQuickPaintedItem {
 }  // namespace
 
 RegionOverlay::RegionOverlay(CaptureFrame frame, GrimAcquisition& acquisition, Mode mode)
-    : mode_(mode), frame_(std::move(frame)), acquisition_(acquisition) {
+    : RegionOverlay(std::move(frame), acquisition, mode, {}) {}
+
+RegionOverlay::RegionOverlay(CaptureFrame frame, GrimAcquisition& acquisition, Mode mode, QString appName)
+    : mode_(mode),
+      appName_(std::move(appName)),
+      desktop_(mode == Mode::Desktop),
+      frame_(std::move(frame)),
+      acquisition_(acquisition) {
   layoutTimer_.setInterval(500);
   connect(&layoutTimer_, &QTimer::timeout, this, [this] {
     if (layoutCheck_ == LayoutCheck::Idle) {
@@ -105,13 +118,16 @@ RegionOverlay::RegionOverlay(CaptureFrame frame, GrimAcquisition& acquisition, M
     }
   });
   connect(&acquisition_, &GrimAcquisition::layoutVerified, this, [this] {
+    if (finished_) {
+      return;
+    }
     if (layoutCheck_ == LayoutCheck::Confirming) {
       if (pendingAction_ == Action::PickColor) {
-        const auto color = frame_.sampleSrgb(pickedPoint_);
+        const auto color = frame_->sampleSrgb(pickedPoint_);
         finish({}, color.isValid() ? QString() : QStringLiteral("Could not sample the selected pixel."), color);
         return;
       }
-      auto crop = selection_.confirm(frame_);
+      auto crop = desktop_ ? frame_->image() : selection_.confirm(*frame_);
       if (crop.isNull()) {
         finish({}, QStringLiteral("Could not render the selected screenshot."));
       } else {
@@ -134,13 +150,16 @@ RegionOverlay::RegionOverlay(CaptureFrame frame, GrimAcquisition& acquisition, M
 }
 
 void RegionOverlay::open() {
+  if (finished_) {
+    return;
+  }
   static const bool resourceReady = [] {
     initializePreviewResource();
     return true;
   }();
   Q_UNUSED(resourceReady);
   const auto screens = QGuiApplication::screens();
-  const auto& mapping = frame_.desktopMapping();
+  const auto& mapping = frame_->desktopMapping();
   const auto layoutChanged = [this] { finish({}, QStringLiteral("Output layout changed during region selection.")); };
   if (!mapping || mapping->outputs.isEmpty() || screens.size() != mapping->outputs.size()) {
     layoutChanged();
@@ -152,7 +171,7 @@ void RegionOverlay::open() {
       layoutChanged();
       return;
     }
-    surfaces_.push_back({*match, output, std::make_unique<LayerSurfaceHost>()});
+    surfaces_.push_back({*match, {}, output, std::make_unique<LayerSurfaceHost>()});
   }
 
   static const auto typeId = qmlRegisterType<FrozenOutput>("Holonight.Screenshot", 1, 0, "FrozenOutput");
@@ -161,7 +180,7 @@ void RegionOverlay::open() {
   connect(qGuiApp, &QGuiApplication::screenRemoved, this, layoutChanged);
   connect(qGuiApp, &QGuiApplication::primaryScreenChanged, this, layoutChanged);
   timeout_.start(2000);
-  for (const auto& surface : surfaces_) {
+  for (auto& surface : surfaces_) {
     auto* screen = surface.screen;
     auto* host = surface.host.get();
     connect(screen, &QScreen::geometryChanged, this, layoutChanged);
@@ -192,14 +211,19 @@ void RegionOverlay::open() {
       finish({}, QStringLiteral("Could not load the frozen screenshot preview."));
       return;
     }
-    item->setFrame(frame_, surface.output.logicalBounds);
+    surface.preview = item;
+    item->setFrame(*frame_, surface.output.logicalBounds);
     item->setProperty("primaryOutput", screen == QGuiApplication::primaryScreen());
     item->setProperty("portalMode", mode_ != Mode::Cli);
     item->setProperty("pointPicker", mode_ == Mode::PickColor);
-    connect(item, &FrozenOutput::cancelRequested, this, &RegionOverlay::cancel, Qt::QueuedConnection);
+    item->setProperty("desktop", desktop_);
+    item->setProperty("targetChoice", mode_ == Mode::Choice);
+    item->setProperty("appName", appName_.isEmpty() ? tr("An application") : appName_);
+    connect(item, &FrozenOutput::desktopRequested, this, &RegionOverlay::setDesktop);
+    connect(item, &FrozenOutput::cancelRequested, this, &RegionOverlay::cancel);
     connect(item, &FrozenOutput::copyRequested, this, [this] { confirm(Action::Copy); });
     connect(item, &FrozenOutput::saveRequested, this,
-            [this] { confirm(mode_ == Mode::Share ? Action::Share : Action::Save); });
+            [this] { confirm(mode_ == Mode::Cli ? Action::Save : Action::Share); });
     connect(item, &FrozenOutput::toolRequested, this, [this](int tool) {
       selection_.setTool(static_cast<RegionSelection::Tool>(tool));
       redraw();
@@ -236,6 +260,7 @@ void RegionOverlay::configured() {
   if (!ready_) {
     ready_ = true;
     layoutTimer_.start();
+    redraw();
   }
 }
 
@@ -262,11 +287,11 @@ bool RegionOverlay::eventFilter(QObject* watched, QEvent* event) {
         undo();
       } else if (mode_ == Mode::Cli && key->keyCombination() == QKeyCombination(Qt::ControlModifier, Qt::Key_C)) {
         confirm(Action::Copy);
-      } else if (key->keyCombination() == QKeyCombination(Qt::ControlModifier, Qt::Key_S) ||
-                 key->key() == Qt::Key_Enter || key->key() == Qt::Key_Return) {
-        if (mode_ != Mode::PickColor) {
-          confirm(mode_ == Mode::Share ? Action::Share : Action::Save);
-        }
+      } else if (mode_ == Mode::Cli && (key->keyCombination() == QKeyCombination(Qt::ControlModifier, Qt::Key_S) ||
+                                        key->key() == Qt::Key_Enter || key->key() == Qt::Key_Return)) {
+        confirm(Action::Save);
+      } else {
+        return mode_ == Mode::Cli;
       }
       return true;
     }
@@ -274,7 +299,7 @@ bool RegionOverlay::eventFilter(QObject* watched, QEvent* event) {
     case QEvent::MouseButtonDblClick:
     case QEvent::MouseMove:
     case QEvent::MouseButtonRelease: {
-      if (!ready_ || pendingAction_) {
+      if (!ready_) {
         return true;
       }
       const auto* mouse = static_cast<QMouseEvent*>(event);
@@ -288,13 +313,19 @@ bool RegionOverlay::eventFilter(QObject* watched, QEvent* event) {
             return false;
           }
         }
+        if (pendingAction_) {
+          return true;
+        }
         if (mode_ == Mode::PickColor) {
           pickedPoint_ = point;
           confirm(Action::PickColor);
           return true;
         }
+        if (desktop_) {
+          return true;
+        }
         // Wayland keeps delivering the drag to the surface of the button press.
-        if (selection_.begin(point, frame_)) {
+        if (selection_.begin(point, *frame_)) {
           dragView_ = view;
           redraw();
         }
@@ -317,7 +348,8 @@ bool RegionOverlay::eventFilter(QObject* watched, QEvent* event) {
 }
 
 void RegionOverlay::confirm(Action action) {
-  if (finished_ || !ready_ || pendingAction_ || (action != Action::PickColor && !selection_.canConfirm(frame_))) {
+  if (finished_ || !ready_ || pendingAction_ ||
+      (action != Action::PickColor && !desktop_ && !selection_.canConfirm(*frame_))) {
     return;
   }
   pendingAction_ = action;
@@ -330,18 +362,26 @@ void RegionOverlay::confirm(Action action) {
 }
 
 void RegionOverlay::undo() {
-  if (!pendingAction_) {
+  if (ready_ && !finished_ && !desktop_ && !pendingAction_) {
     selection_.undo();
     redraw();
   }
 }
 
+void RegionOverlay::setDesktop(bool desktop) {
+  if (ready_ && !finished_ && !pendingAction_ && !dragView_ && mode_ == Mode::Choice) {
+    desktop_ = desktop;
+    redraw();
+  }
+}
+
 void RegionOverlay::redraw() {
-  const bool hasCrop = !selection_.cropRect(frame_).isEmpty();
-  const bool actionsAvailable = !pendingAction_ && selection_.canConfirm(frame_);
+  const bool hasCrop = !desktop_ && !selection_.cropRect(*frame_).isEmpty();
+  const bool actionsAvailable = !pendingAction_ && (desktop_ || selection_.canConfirm(*frame_));
   for (const auto& surface : surfaces_) {
     auto* item = static_cast<FrozenOutput*>(surface.host->rootObject());
-    item->setSelection(selection_);
+    item->setSelection(desktop_ ? RegionSelection{} : selection_);
+    item->setProperty("desktop", desktop_);
     item->setProperty("hasCrop", hasCrop);
     item->setProperty("actionsAvailable", actionsAvailable);
     item->setProperty("undoAvailable", actionsAvailable && selection_.canUndo());
@@ -363,11 +403,23 @@ void RegionOverlay::finish(QImage crop, QString error, QColor color) {
   timeout_.stop();
   layoutTimer_.stop();
   acquisition_.cancel();
+  frame_.reset();
   for (const auto& surface : surfaces_) {
-    if (auto* view = surface.host->view()) {
-      view->removeEventFilter(this);
+    QPointer<QQuickWindow> window;
+    if (surface.preview) {
+      window = surface.preview->window();
+      static_cast<FrozenOutput*>(surface.preview.get())->clearFrame();
+    }
+    if (window) {
+      window->removeEventFilter(this);
     }
     surface.host->close();
+    if (window) {
+      window->setPersistentSceneGraph(false);
+      window->setPersistentGraphics(false);
+      window->hide();
+      window->releaseResources();
+    }
   }
   if (!error.isEmpty()) {
     emit failed(error);

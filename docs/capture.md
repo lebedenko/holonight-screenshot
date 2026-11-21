@@ -52,9 +52,11 @@ The CLI handles arguments, clipboard transfer, and the save dialog. Its
 installed-package build uses `-DSCREENSHOT_USE_INSTALLED_CAPTURE=ON` and a
 `CMAKE_PREFIX_PATH` pointing to the provider installation.
 
-The portal’s area overlay confirms with **Share** and uses the same crop and
-annotation compositor as the CLI. The point picker samples the frozen
-desktop in logical coordinates. It maps the click into the compositor’s
-capture-scale raster, checks the layout again before returning the pixel,
-and uses the image profile to convert to sRGB. Untagged pixels are treated
-as sRGB. Both portal modes support Escape and **Cancel**.
+The portal opens this overlay with a frozen frame and the requesting app’s
+name. Area confirms with **Share** and uses the same crop and annotation
+compositor as the CLI. Interactive requests start in Area and can switch to
+Desktop. Desktop shows and shares the full captured frame. The point picker
+maps a click into the capture-scale raster, checks the layout again, and
+uses the image profile to convert the pixel to sRGB. Untagged pixels are
+treated as sRGB. Escape and **Cancel** dismiss every review mode. Closing
+the overlays releases their references to the captured pixels.

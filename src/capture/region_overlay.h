@@ -9,6 +9,7 @@
 #include <memory>
 #include <vector>
 
+class QQuickItem;
 class QQuickView;
 class QScreen;
 
@@ -19,8 +20,9 @@ class GrimAcquisition;
 class RegionOverlay final : public QObject {
   Q_OBJECT
  public:
-  enum class Mode { Cli, Share, PickColor };
+  enum class Mode { Cli, Share, PickColor, SelectArea, Desktop, Choice };
   RegionOverlay(CaptureFrame frame, GrimAcquisition& acquisition, Mode mode = Mode::Cli);
+  RegionOverlay(CaptureFrame frame, GrimAcquisition& acquisition, Mode mode, QString appName);
   void cancel();
   void open();
 
@@ -38,18 +40,22 @@ class RegionOverlay final : public QObject {
   void configured();
   void redraw();
   void undo();
+  void setDesktop(bool desktop);
   void confirm(Action action);
   void finish(QImage crop = {}, QString error = {}, QColor color = {});
 
   struct Surface {
     QScreen* screen;
+    QPointer<QQuickItem> preview;
     OutputGeometry output;
     std::unique_ptr<Holonight::Wayland::LayerSurfaceHost> host;
   };
 
   Mode mode_;
+  QString appName_;
+  bool desktop_;
   QPointF pickedPoint_;
-  CaptureFrame frame_;
+  std::optional<CaptureFrame> frame_;
   GrimAcquisition& acquisition_;
   RegionSelection selection_;
   std::vector<Surface> surfaces_;
