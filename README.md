@@ -30,6 +30,9 @@ QML lint uses `qmllint` from the Qt SDK selected by CMake.
 | `task license-check` | Validate REUSE metadata. |
 
 `tidy` and `qml-lint` default to `dev` and accept `PRESET=release`.
+Clang-tidy runs up to four translation units concurrently by default, limited
+by available CPUs. Set `TIDY_JOBS=2 task tidy` or `TIDY_JOBS=2 task check`
+to change the limit.
 The aggregate gate always uses `dev` to include tests. The session test
 requires local Unix socket access.
 
