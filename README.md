@@ -14,6 +14,25 @@ task run -- --help
 task run PRESET=release -- --version
 ```
 
+## Code quality
+
+Run `task check` for C and C++ formatting, REUSE metadata, Clang static
+analysis, QML lint, and the full development test suite. Install Python 3,
+Git, `clang-format`, `clang-tidy`, and `reuse` alongside the build tools.
+QML lint uses `qmllint` from the Qt SDK selected by CMake.
+
+| Task | What it does |
+| --- | --- |
+| `task format` | Format owned C and C++ files in place. |
+| `task format-check` | Check C and C++ formatting without editing files. |
+| `task tidy` | Build and analyze owned translation units in the selected preset. |
+| `task qml-lint` | Lint the launcher and region overlay. |
+| `task license-check` | Validate REUSE metadata. |
+
+`tidy` and `qml-lint` default to `dev` and accept `PRESET=release`.
+The aggregate gate always uses `dev` to include tests. The session test
+requires local Unix socket access.
+
 ## Command line
 
 | Command | Result |

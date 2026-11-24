@@ -1,0 +1,18 @@
+import QtQuick.tooling 1.2
+
+// Mirrors FrozenOutput's runtime registration in region_overlay.cpp.
+Module {
+    Component {
+        name: "FrozenOutput"
+        prototype: "QQuickPaintedItem"
+        exports: ["Holonight.Screenshot/FrozenOutput 1.0"]
+        exportMetaObjectRevisions: [256]
+        Signal { name: "desktopRequested"; Parameter { name: "desktop"; type: "bool" } }
+        Signal { name: "copyRequested" }
+        Signal { name: "saveRequested" }
+        Signal { name: "cancelRequested" }
+        Signal { name: "toolRequested"; Parameter { name: "tool"; type: "int" } }
+        Signal { name: "colorRequested"; Parameter { name: "color"; type: "QColor" } }
+        Signal { name: "undoRequested" }
+    }
+}

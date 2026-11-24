@@ -34,3 +34,12 @@ if(BUILD_TESTING)
   find_package(Qt6 6.11 REQUIRED COMPONENTS Test)
   add_subdirectory(tests)
 endif()
+
+add_custom_target(qml-lint
+  COMMAND Qt6::qmllint --ignore-settings --max-warnings 0
+    -I "${CMAKE_CURRENT_SOURCE_DIR}/tooling/qml"
+    --resource "${CMAKE_CURRENT_SOURCE_DIR}/apps/screenshot/launcher.qrc"
+    --resource "${CMAKE_CURRENT_SOURCE_DIR}/src/capture/region-preview.qrc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/apps/screenshot/Launcher.qml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/capture/RegionPreview.qml"
+  VERBATIM)

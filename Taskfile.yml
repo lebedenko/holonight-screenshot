@@ -19,3 +19,42 @@ tasks:
         vars:
           PRESET: dev
       - ctest --preset dev {{.CLI_ARGS}}
+  format:
+    desc: Format owned C and C++ files
+    cmds:
+      - python3 scripts/quality.py format
+  format-check:
+    desc: Check C and C++ formatting without editing files
+    cmds:
+      - python3 scripts/quality.py format-check
+  tidy:
+    desc: Build and run Clang static analysis for the selected preset
+    cmds:
+      - task: build
+      - task: tidy:analyze
+  tidy:analyze:
+    internal: true
+    cmds:
+      - python3 scripts/quality.py tidy --build "build/{{.PRESET}}"
+  qml-lint:
+    desc: Lint the launcher and region overlay with the selected Qt SDK
+    cmds:
+      - cmake --preset "{{.PRESET}}"
+      - cmake --build --preset "{{.PRESET}}" --target qml-lint
+  license-check:
+    desc: Validate REUSE licensing metadata
+    cmds:
+      - reuse --no-multiprocessing lint
+  check:
+    desc: Run the native quality gate and development tests
+    vars:
+      PRESET: dev
+    cmds:
+      - task: format-check
+      - task: license-check
+      - task: build
+        vars: {PRESET: dev}
+      - task: tidy:analyze
+        vars: {PRESET: dev}
+      - cmake --build --preset dev --target qml-lint
+      - ctest --preset dev

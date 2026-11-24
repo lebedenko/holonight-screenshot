@@ -1,3 +1,4 @@
+pragma ComponentBehavior: Bound
 import Holonight.Screenshot
 import QtQuick
 import QtQuick.Controls as Controls
@@ -120,11 +121,11 @@ FrozenOutput {
                     text: modelData.label
                     highlighted: preview.activeColor === swatchColor
                     enabled: preview.actionsAvailable
-                    leftPadding: indicator.width + 12
+                    leftPadding: colorSwatch.width + 12
                     onClicked: preview.colorRequested(swatchColor)
 
                     Rectangle {
-                        id: indicator
+                        id: colorSwatch
 
                         anchors.left: parent.left
                         anchors.leftMargin: 8
