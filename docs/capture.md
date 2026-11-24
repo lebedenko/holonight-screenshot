@@ -4,7 +4,7 @@ A delayed screenshot should preserve an open menu or a stationary tooltip. The a
 
 ## Operation lifetime
 
-Each CaptureController represents one request and owns its timer. Its caller supplies a dedicated DesktopAcquisition that outlives the controller. Provider calls and result delivery take place on the controller thread. A provider may report a startup failure synchronously. The executable chooses its runtime application type after parsing the command line. Full-desktop capture uses QCoreApplication. Region capture uses QApplication and opens its first surface after a validated frame is delivered.
+Each CaptureController represents one request and owns its timer. Its caller supplies a dedicated DesktopAcquisition that outlives the controller. Provider calls and result delivery take place on the controller thread. A provider may report a startup failure synchronously. The executable chooses its runtime application type after parsing the command line. Headless Screen and Active Window CLI requests use QCoreApplication. CLI Region uses QApplication and opens its first surface after a validated frame is delivered.
 
 Expiry moves the request from waiting to acquiring. Only an acquiring request can publish a frame or failure. Cancellation retires the request before stopping the timer or active provider, so a helper error during shutdown and a late frame both have no effect. Destroying an unfinished controller cancels the operation. A fresh capture uses a new operation.
 
@@ -12,9 +12,17 @@ Expiry moves the request from waiting to acquiring. Only an acquiring request ca
 
 The executable requires `--output PATH` for full-desktop capture. It accepts `--delay-ms N` (0 through `INT_MAX` milliseconds), and enables pointer capture with `--include-cursor`. The defaults are immediate capture and cursor exclusion. It uses QSaveFile to encode and commit the PNG at the given path. Help and version use QCoreApplication and work outside a Wayland session.
 
-The executable's private provider queries output layout at expiry using `hyprctl -j monitors` on Hyprland and read-only `wlr-randr --json` on Sway and labwc. It runs `grim -s SCALE -t png [-c] -` once at the highest active output scale, and queries the monitor layout again. Each layout query has a two-second deadline and grim has 15 seconds. The asynchronous children keep diagnostics separate from the PNG bytes. Cancellation kills the current child and discards the buffered PNG.
+The Grim provider queries output layout at expiry using `hyprctl -j monitors` on Hyprland and read-only `wlr-randr --json` on Sway and labwc. It runs `grim -s SCALE -t png [-c] -` once at the highest active output scale, and queries the monitor layout again. Each layout query has a two-second deadline and grim has 15 seconds. The asynchronous children keep diagnostics separate from the PNG bytes. Cancellation kills the current child and discards the buffered PNG.
 
 The two monitor snapshots must agree on active output identity, mode dimensions, logical positions, transforms and scales. The wlroots adapter also compares the current mode refresh rate and rejects overlapping outputs. Hyprland rejects active mirrors and powered-off outputs. The provider decodes the PNG in memory after validating the snapshots and publishes the frame only if its size matches the expected canvas.
+
+## Session capabilities and window capture
+
+CaptureSession discovers globals from the actual Wayland display and checks the helpers on PATH. The Qt Quick launcher uses Qt’s display. Headless CLI requests open a Wayland connection with an event-driven registry listener. Capability discovery also checks the installed grim help for `-T`. Screen needs an output capture protocol and a layout backend. Area adds layer shell. Window needs the foreign toplevel list, foreign toplevel image source, and image copy capture globals. The CLI and launcher use these same capability results.
+
+The session keeps foreign toplevel handles alive, publishes title and app ID updates on their done events, and removes closed handles. The picker selects by the compositor’s opaque identifier. After confirmation, the UI hides and waits for a Wayland sync on Qt’s display before starting the timer. The launcher uses the same hide barrier for Screen and Region. At expiry, a selected window must still exist. Window capture runs `grim -t png -T ID [-c] -` and publishes an image-local frame. For Active Window, the provider resolves the identifier at expiry with Hyprland’s `activewindow` `stableId` or Sway’s focused tree node and `foreign_toplevel_identifier`. An empty window list or absent focus leaves session capabilities intact. labwc has no focus lookup in this workflow.
+
+The launcher holds one capture at a time. A failure returns to the launcher with a diagnostic, and cancellation restores its prior options. Launcher Region uses the selection-only overlay and returns the crop to the shared Screen, Window, and Region preview. The CLI Region workflow retains its annotation and direct Copy and Save actions.
 
 ## Frame coordinates
 

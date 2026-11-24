@@ -20,13 +20,13 @@ class GrimAcquisition;
 class RegionOverlay final : public QObject {
   Q_OBJECT
  public:
-  enum class Mode { Cli, Share, PickColor, SelectArea, Desktop, Choice };
+  enum class Mode { Cli, Share, PickColor, SelectArea, Desktop, Choice, SelectionOnly };
   RegionOverlay(CaptureFrame frame, GrimAcquisition& acquisition, Mode mode = Mode::Cli);
   RegionOverlay(CaptureFrame frame, GrimAcquisition& acquisition, Mode mode, QString appName);
   void cancel();
   void open();
 
-  enum class Action { Copy, Save, Share, PickColor };
+  enum class Action { Copy, Save, Share, PickColor, Select };
   Q_ENUM(Action)
 
  signals:

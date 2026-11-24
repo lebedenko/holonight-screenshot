@@ -214,7 +214,8 @@ void RegionOverlay::open() {
     surface.preview = item;
     item->setFrame(*frame_, surface.output.logicalBounds);
     item->setProperty("primaryOutput", screen == QGuiApplication::primaryScreen());
-    item->setProperty("portalMode", mode_ != Mode::Cli);
+    item->setProperty("portalMode", mode_ != Mode::Cli && mode_ != Mode::SelectionOnly);
+    item->setProperty("selectionOnly", mode_ == Mode::SelectionOnly);
     item->setProperty("pointPicker", mode_ == Mode::PickColor);
     item->setProperty("desktop", desktop_);
     item->setProperty("targetChoice", mode_ == Mode::Choice);
@@ -222,8 +223,12 @@ void RegionOverlay::open() {
     connect(item, &FrozenOutput::desktopRequested, this, &RegionOverlay::setDesktop);
     connect(item, &FrozenOutput::cancelRequested, this, &RegionOverlay::cancel);
     connect(item, &FrozenOutput::copyRequested, this, [this] { confirm(Action::Copy); });
-    connect(item, &FrozenOutput::saveRequested, this,
-            [this] { confirm(mode_ == Mode::Cli ? Action::Save : Action::Share); });
+    connect(item, &FrozenOutput::saveRequested, this, [this] {
+      const auto action = mode_ == Mode::SelectionOnly ? Action::Select
+                          : mode_ == Mode::Cli         ? Action::Save
+                                                       : Action::Share;
+      confirm(action);
+    });
     connect(item, &FrozenOutput::toolRequested, this, [this](int tool) {
       selection_.setTool(static_cast<RegionSelection::Tool>(tool));
       redraw();
@@ -287,6 +292,8 @@ bool RegionOverlay::eventFilter(QObject* watched, QEvent* event) {
         undo();
       } else if (mode_ == Mode::Cli && key->keyCombination() == QKeyCombination(Qt::ControlModifier, Qt::Key_C)) {
         confirm(Action::Copy);
+      } else if (mode_ == Mode::SelectionOnly && (key->key() == Qt::Key_Enter || key->key() == Qt::Key_Return)) {
+        confirm(Action::Select);
       } else if (mode_ == Mode::Cli && (key->keyCombination() == QKeyCombination(Qt::ControlModifier, Qt::Key_S) ||
                                         key->key() == Qt::Key_Enter || key->key() == Qt::Key_Return)) {
         confirm(Action::Save);

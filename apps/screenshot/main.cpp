@@ -1,32 +1,26 @@
-#include "capture_controller.h"
-#include "grim_acquisition.h"
-#include "png_output.h"
-#include "region_overlay.h"
+#include "workflow.h"
 
 #include <QApplication>
 #include <QCommandLineParser>
-#include <QCoreApplication>
+#include <QStandardPaths>
 #include <QTextStream>
+#include <QTimer>
 
+#include <algorithm>
 #include <cstdlib>
 #include <limits>
 #include <wayland-client.h>
 
 namespace {
 
+using screenshot::CaptureTarget;
+
 int reportFailure(const QString& reason) {
   QTextStream(stderr) << reason << Qt::endl;
   return EXIT_FAILURE;
 }
 
-struct Options {
-  QString path;
-  int delayMs;
-  screenshot::CursorPolicy cursor;
-  bool region;
-};
-
-std::optional<Options> parseOptions(int argc, char** argv) {
+std::optional<screenshot::Options> parseOptions(int argc, char** argv) {
   QCoreApplication app(argc, argv);
   app.setApplicationName(QStringLiteral("holonight-screenshot"));
   app.setApplicationVersion(QStringLiteral(SCREENSHOT_VERSION));
@@ -39,108 +33,104 @@ std::optional<Options> parseOptions(int argc, char** argv) {
   const QCommandLineOption delay(QStringLiteral("delay-ms"), QStringLiteral("Wait N milliseconds before capture."),
                                  QStringLiteral("N"), QStringLiteral("0"));
   const QCommandLineOption cursor(QStringLiteral("include-cursor"), QStringLiteral("Include the pointer."));
-  const QCommandLineOption region(QStringLiteral("region"), QStringLiteral("Select a region of the frozen desktop."));
-  parser.addOptions({output, delay, cursor, region});
+  const QCommandLineOption region(QStringLiteral("region"), QStringLiteral("Alias for --target area."));
+  const QCommandLineOption target(QStringLiteral("target"),
+                                  QStringLiteral("Capture screen, area, window, or active-window."),
+                                  QStringLiteral("TARGET"));
+  const QCommandLineOption list(QStringLiteral("list-targets"),
+                                QStringLiteral("Print supported targets as a JSON array."));
+  parser.addOptions({output, delay, cursor, region, target, list});
   parser.process(app);
 
-  const auto path = parser.value(output);
-  if (parser.values(output).size() > 1 || (parser.isSet(output) && path.isEmpty()) ||
-      (!parser.isSet(region) && path.isEmpty()) || !parser.positionalArguments().isEmpty()) {
-    reportFailure(
-        QStringLiteral("Specify --output PATH exactly once for desktop capture, or optionally with --region. "
-                       "Positional arguments are invalid."));
+  screenshot::Options options;
+  options.path = parser.value(output);
+  options.list = parser.isSet(list);
+  if (parser.values(output).size() > 1 || (parser.isSet(output) && options.path.isEmpty()) ||
+      !parser.positionalArguments().isEmpty()) {
+    reportFailure(QStringLiteral("Specify --output PATH at most once. Positional arguments are invalid."));
     return std::nullopt;
   }
+  if (options.list && (parser.isSet(output) || parser.isSet(delay) || parser.isSet(cursor) || parser.isSet(region) ||
+                       parser.isSet(target))) {
+    reportFailure(QStringLiteral("--list-targets cannot be combined with capture options."));
+    return std::nullopt;
+  }
+  if (parser.isSet(target)) {
+    const auto name = parser.value(target);
+    const auto mode = std::ranges::find(screenshot::captureTargets, name, screenshot::targetName);
+    if (parser.values(target).size() != 1 || mode == screenshot::captureTargets.end()) {
+      reportFailure(QStringLiteral("--target must be one of screen, area, window, or active-window."));
+      return std::nullopt;
+    }
+    options.target = *mode;
+  }
+  if (parser.isSet(region)) {
+    if (options.target && options.target != CaptureTarget::Area) {
+      reportFailure(QStringLiteral("--region conflicts with the requested --target."));
+      return std::nullopt;
+    }
+    options.target = CaptureTarget::Area;
+  } else if (!options.target && (parser.isSet(output) || parser.isSet(delay) || parser.isSet(cursor))) {
+    options.target = CaptureTarget::Screen;
+  }
+  if ((options.target == CaptureTarget::Screen || options.target == CaptureTarget::ActiveWindow) &&
+      options.path.isEmpty()) {
+    reportFailure(QStringLiteral("Screen and active-window capture require --output PATH."));
+    return std::nullopt;
+  }
+
   bool validDelay = false;
-  const auto delayMs = parser.value(delay).toInt(&validDelay);
-  if (!validDelay || delayMs < 0 || parser.values(delay).size() > 1) {
+  options.delayMs = parser.value(delay).toInt(&validDelay);
+  if (!validDelay || options.delayMs < 0 || parser.values(delay).size() > 1) {
     reportFailure(
         QStringLiteral("--delay-ms must be an integer from 0 through %1.").arg(std::numeric_limits<int>::max()));
     return std::nullopt;
   }
-
-  return Options{path, delayMs,
-                 parser.isSet(cursor) ? screenshot::CursorPolicy::Include : screenshot::CursorPolicy::Exclude,
-                 parser.isSet(region)};
+  options.cursor = parser.isSet(cursor) ? screenshot::CursorPolicy::Include : screenshot::CursorPolicy::Exclude;
+  return options;
 }
 
-int capture(QCoreApplication& app, const Options& options) {
-  screenshot::GrimAcquisition acquisition;
-  std::unique_ptr<screenshot::RegionOverlay> overlay;
-  screenshot::CaptureController controller(acquisition, std::chrono::milliseconds(options.delayMs), options.cursor);
-  const auto complete = [&](const QString& error) { app.exit(error.isEmpty() ? EXIT_SUCCESS : reportFailure(error)); };
-  const auto fail = [&](const QString& reason) { app.exit(reportFailure(reason)); };
-  QObject::connect(&controller, &screenshot::CaptureController::failed, &app, fail);
-  QObject::connect(
-      &controller, &screenshot::CaptureController::captured, &app, [&](const screenshot::CaptureFrame& frame) {
-        if (!options.region) {
-          complete(screenshot::savePng(options.path, frame.image()));
-          return;
-        }
-        overlay = std::make_unique<screenshot::RegionOverlay>(frame, acquisition);
-        QObject::connect(overlay.get(), &screenshot::RegionOverlay::failed, &app, fail, Qt::QueuedConnection);
-        QObject::connect(
-            overlay.get(), &screenshot::RegionOverlay::canceled, &app, [&] { app.exit(2); }, Qt::QueuedConnection);
-        QObject::connect(
-            overlay.get(), &screenshot::RegionOverlay::selected, &app,
-            [&](screenshot::RegionOverlay::Action action, const QImage& crop) {
-              if (action == screenshot::RegionOverlay::Action::Copy) {
-                complete(screenshot::copyPng(crop));
-                return;
-              }
-              const auto path = options.path.isEmpty() ? screenshot::choosePngPath() : options.path;
-              if (path.isEmpty()) {
-                app.exit(2);
-                return;
-              }
-              complete(screenshot::savePng(path, crop));
-            },
-            Qt::QueuedConnection);
-        overlay->open();
-      });
+int run(QCoreApplication& app, const screenshot::Options& options) {
+  app.setApplicationName(QStringLiteral("holonight-screenshot"));
+  screenshot::Workflow workflow(options);
+  QTimer::singleShot(0, &workflow, &screenshot::Workflow::start);
   return app.exec();
 }
 
 }  // namespace
 
 int main(int argc, char** argv) {
-  const auto options = parseOptions(argc, argv);
+  auto options = parseOptions(argc, argv);
   if (!options) {
     return EXIT_FAILURE;
   }
 
-  // Application options have already been consumed. In particular, a destination
-  // named like a Qt platform option must only be interpreted as a path.
+  // Qt must not interpret a destination named like a platform option as an option.
   static int appArgc = 1;
   static char* appArgv[] = {argv[0], nullptr};
-  if (!options->region) {
+  if (options->list || options->target == CaptureTarget::Screen || options->target == CaptureTarget::ActiveWindow) {
     QCoreApplication app(appArgc, appArgv);
-    return capture(app, *options);
+    return run(app, *options);
   }
 
-  auto platform = qgetenv("QT_QPA_PLATFORM");
-  if (platform.isEmpty()) {
-    platform = "wayland";
-  }
-  // QApplication aborts when it cannot connect to the platform display.
-  // Check the Wayland connection so a missing session is a normal CLI failure.
-  if (platform.startsWith("wayland")) {
-    // A supplied WAYLAND_SOCKET is a single-use connection owned by Qt.
-    if (!qEnvironmentVariableIsSet("WAYLAND_SOCKET")) {
-      auto* display = wl_display_connect(nullptr);
-      if (!display) {
-        return reportFailure(QStringLiteral("Could not connect to Wayland for region selection."));
-      }
-      wl_display_disconnect(display);
+  const auto platform =
+      qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM") ? QByteArray("wayland") : qgetenv("QT_QPA_PLATFORM");
+  if (platform.startsWith("wayland") && !qEnvironmentVariableIsSet("WAYLAND_SOCKET")) {
+    auto* display = wl_display_connect(nullptr);
+    if (!display) {
+      return reportFailure(QStringLiteral("Could not connect to Wayland."));
     }
+    wl_display_disconnect(display);
   }
   qputenv("QT_QPA_PLATFORM", platform);
-  // The layer-surface host assigns the Wayland role itself. Honor its window
-  // flag so Qt does not create an xdg-toplevel role for the same surface.
+  // The layer-surface host assigns its own role. Qt must honor its bypass flag.
   qputenv("QT_WAYLAND_USE_BYPASSWINDOWMANAGERHINT", "1");
-  // The layer-shell singleton needs the display during static destruction.
-  // QApplication itself must outlive Qt Widgets' static state during that teardown.
+  // The layer-shell singleton still needs the display at static destruction.
   static auto* const app = new QApplication(appArgc, appArgv);
+  const auto desktopId = QStringLiteral("org.holonight.Screenshot");
+  if (!QStandardPaths::locate(QStandardPaths::ApplicationsLocation, desktopId + ".desktop").isEmpty()) {
+    app->setDesktopFileName(desktopId);
+  }
   app->setQuitOnLastWindowClosed(false);
-  return capture(*app, *options);
+  return run(*app, *options);
 }

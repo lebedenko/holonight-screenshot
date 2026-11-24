@@ -1,8 +1,10 @@
 # HoloNight Screenshot
 
-A standalone Qt command-line utility that captures a Hyprland, Sway, or labwc desktop to a PNG. The default saves the full desktop without opening a window. Live capture requires `grim` on PATH, plus `hyprctl` in Hyprland or `wlr-randr` with JSON support in Sway and labwc. The raster geometry follows grim 1.5.0.
+A Qt Quick screenshot launcher and CLI for Hyprland, Sway, and labwc. Run `holonight-screenshot` without arguments to open the launcher. Choose **Region**, **Window**, or **Screen**, then set a delay and optionally include the mouse cursor. Region captures the desktop first and opens a frozen selection overlay. Drag a rectangle, then press Enter to confirm or Esc to cancel. Window opens a live picker. Use the arrow keys to select a window and Enter to confirm. Screen captures the entire desktop across all outputs.
 
-Build on the host with CMake 3.25+, Ninja, Task, a C++23 compiler and Qt 6.11+ (Core, Gui, Widgets, Quick, Quick Controls, Wayland Client, and Test for the development preset). Install the Wayland component of HoloNight Qt so CMake can resolve `HolonightQt::Wayland`. If several installs are present, set `HolonightQt_DIR` to the package directory containing the Wayland component.
+The result preview offers **Copy**, **Save…**, and **New Capture**. Copy and Save leave the preview open. The default delay is **None**, and the cursor is excluded.
+
+Build on the host with CMake 3.25+, Ninja, Task, C and C++23 compilers, `wayland-scanner`, the `wayland-protocols` XML files, and Qt 6.11+ (Core, Gui, Widgets, Quick, Quick Controls, Wayland Client, and Test for the development preset). Install the Wayland component of HoloNight Qt so CMake can resolve `HolonightQt::Wayland`. If several installs are present, set `HolonightQt_DIR` to the package directory containing the Wayland component.
 
 ```sh
 task build
@@ -12,9 +14,23 @@ build/dev/apps/screenshot/holonight-screenshot --version
 task build PRESET=release
 ```
 
-Full-desktop capture requires `--output PATH`. Capture starts immediately unless you pass `--delay-ms N` (0–2147483647 milliseconds). Add `--include-cursor` to draw the pointer. The destination is replaced atomically after a successful capture. Failures are reported on stderr and return a nonzero exit status.
+## Command line
 
-Add `--region` to select an area from one frozen capture. Drag with the left mouse button, including across outputs, and release to review the selection. Use **Select** to replace the crop and clear its marks. Choose **Pen**, **Arrow**, or **Rectangle**, then drag from inside the crop to draw. A Pen click makes a dot. Red is the default, with yellow, white, and black also available. **Undo** or Ctrl+Z removes the most recent mark.
+| Command | Result |
+| --- | --- |
+| `holonight-screenshot --output PATH` | Capture the entire desktop without opening a window. Also accepts `--target screen`. |
+| `holonight-screenshot --target area [--output PATH]` | Open the frozen region overlay with annotation tools. `--region` is an alias. |
+| `holonight-screenshot --target window [--output PATH]` | Open the window picker and save to the given path or open the result preview. |
+| `holonight-screenshot --target active-window --output PATH` | Capture the window focused when the delay expires. Intended for Hyprland and Sway shortcuts. |
+| `holonight-screenshot --list-targets` | Print the session’s supported target names as a JSON array. |
+
+Use `--delay-ms N` for a delay in milliseconds (0–2147483647) and `--include-cursor` to request the pointer. For Window, the delay starts after the picker closes. PNG output replaces the destination atomically. CLI exit statuses are 0 for success, 1 for error, and 2 for cancellation. Help and version work outside a Wayland session.
+
+Screen and Region require `grim` and a layout helper. Hyprland uses `hyprctl`, while Sway and labwc use `wlr-randr` with JSON support. Window requires `grim -T` and the compositor’s foreign toplevel list and image-copy protocols. Active Window also requires `hyprctl` on Hyprland or `swaymsg` on Sway. labwc offers Window when the protocols are available.
+
+## CLI region annotation
+
+Drag with the left mouse button, including across outputs, and release to review the selection. Use **Select** to replace the crop and clear its marks. Choose **Pen**, **Arrow**, or **Rectangle**, then drag from inside the crop to draw. A Pen click makes a dot. Red is the default, with yellow, white, and black also available. **Undo** or Ctrl+Z removes the most recent mark.
 
 After releasing the drag, the primary overlay offers **Copy** (Ctrl+C) and **Save** (Ctrl+S, Enter, or Return). Both include the committed marks. Copy requires `wl-copy` from the `wl-clipboard` package and places a PNG on the Wayland clipboard. Save writes directly when you pass `--output PATH`, or opens the desktop’s configured PNG save dialog when you omit it. On HoloNight, this uses the configured FileChooser portal when available.
 

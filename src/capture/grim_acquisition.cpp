@@ -155,9 +155,33 @@ std::optional<Layout> parseLayout(const QByteArray& json, bool wlr) {
   return layout;
 }
 
+QString focusedSwayWindow(const QJsonObject& node) {
+  if (node.value("focused").toBool()) {
+    return node.value("foreign_toplevel_identifier").toString();
+  }
+  for (const auto* children : {"nodes", "floating_nodes"}) {
+    for (const auto& child : node.value(children).toArray()) {
+      const auto id = focusedSwayWindow(child.toObject());
+      if (!id.isEmpty()) {
+        return id;
+      }
+    }
+  }
+  return {};
+}
+
 }  // namespace
 
-GrimAcquisition::GrimAcquisition() : wlr_(usesWlrOutputManagement()) {
+GrimAcquisition::GrimAcquisition() : GrimAcquisition(usesWlrOutputManagement()) {}
+
+GrimAcquisition::GrimAcquisition(const CaptureSession& session, CaptureTarget target, QString windowId)
+    : GrimAcquisition(session.capabilities().wlrLayout) {
+  session_ = &session;
+  target_ = target;
+  windowId_ = std::move(windowId);
+}
+
+GrimAcquisition::GrimAcquisition(bool wlr) : wlr_(wlr) {
   process_.setProcessChannelMode(QProcess::SeparateChannels);
   timeout_.setSingleShot(true);
   timeout_.setTimerType(Qt::PreciseTimer);
@@ -177,8 +201,42 @@ void GrimAcquisition::start(CursorPolicy cursor) {
     return;
   }
   cursor_ = cursor;
+  if (target_ == CaptureTarget::Window) {
+    if (!session_->containsWindow(windowId_)) {
+      fail(QStringLiteral("The selected window closed before capture."));
+    } else {
+      captureWindow();
+    }
+    return;
+  }
+  if (target_ == CaptureTarget::ActiveWindow) {
+    stage_ = Stage::Focus;
+    switch (session_->capabilities().focus) {
+      case FocusLookup::Hyprland:
+        run(QStringLiteral("hyprctl"), {QStringLiteral("-j"), QStringLiteral("activewindow")}, layoutTimeoutMs);
+        break;
+      case FocusLookup::Sway:
+        run(QStringLiteral("swaymsg"), {QStringLiteral("-r"), QStringLiteral("-t"), QStringLiteral("get_tree")},
+            layoutTimeoutMs);
+        break;
+      case FocusLookup::None:
+        fail(QStringLiteral("Active window lookup is unavailable in this session."));
+        break;
+    }
+    return;
+  }
   stage_ = Stage::Before;
   queryLayout();
+}
+
+void GrimAcquisition::captureWindow() {
+  QStringList arguments{QStringLiteral("-t"), QStringLiteral("png"), QStringLiteral("-T"), windowId_};
+  if (cursor_ == CursorPolicy::Include) {
+    arguments.append(QStringLiteral("-c"));
+  }
+  arguments.append(QStringLiteral("-"));
+  stage_ = Stage::Window;
+  run(QStringLiteral("grim"), arguments, captureTimeoutMs);
 }
 
 void GrimAcquisition::queryLayout() {
@@ -208,8 +266,10 @@ void GrimAcquisition::stop() {
   if (process_.state() != QProcess::NotRunning) {
     process_.kill();
   }
-  process_.readAllStandardOutput();
-  process_.readAllStandardError();
+  if (process_.isOpen()) {
+    process_.readAllStandardOutput();
+    process_.readAllStandardError();
+  }
 }
 
 void GrimAcquisition::run(const QString& program, const QStringList& arguments, int timeoutMs) {
@@ -248,7 +308,36 @@ void GrimAcquisition::finished(int exitCode, QProcess::ExitStatus status) {
   }
   timeout_.stop();
   if (status != QProcess::NormalExit || exitCode != 0) {
-    fail(QStringLiteral("%1 failed (exit %2). %3").arg(process_.program()).arg(exitCode).arg(diagnostic).trimmed());
+    if (stage_ == Stage::Window && target_ == CaptureTarget::Window && !session_->containsWindow(windowId_)) {
+      fail(QStringLiteral("The selected window closed before capture completed."));
+    } else {
+      fail(QStringLiteral("%1 failed (exit %2). %3").arg(process_.program()).arg(exitCode).arg(diagnostic).trimmed());
+    }
+    return;
+  }
+  if (stage_ == Stage::Focus) {
+    const auto document = QJsonDocument::fromJson(data);
+    if (!document.isObject()) {
+      fail(QStringLiteral("The compositor returned an invalid focus response."));
+      return;
+    }
+    windowId_ = session_->capabilities().focus == FocusLookup::Hyprland ? document.object().value("stableId").toString()
+                                                                        : focusedSwayWindow(document.object());
+    if (windowId_.isEmpty()) {
+      fail(QStringLiteral("There is no focused window with a capture ID."));
+    } else {
+      captureWindow();
+    }
+    return;
+  }
+  if (stage_ == Stage::Window) {
+    const auto image = QImage::fromData(data, "PNG");
+    if (image.isNull()) {
+      fail(QStringLiteral("grim returned an invalid window PNG."));
+    } else {
+      cancel();
+      emit captured(CaptureFrame(image));
+    }
     return;
   }
   if (stage_ == Stage::Capture) {

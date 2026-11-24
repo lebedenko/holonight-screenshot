@@ -9,6 +9,7 @@ FrozenOutput {
     property bool desktop: false
     property bool targetChoice: false
     property bool portalMode: false
+    property bool selectionOnly: false
     property bool pointPicker: false
     property bool primaryOutput: false
     property bool hasCrop: false
@@ -25,17 +26,17 @@ FrozenOutput {
         anchors.bottom: parent.bottom
         anchors.bottomMargin: 24
         spacing: 8
-        visible: preview.primaryOutput && (preview.hasCrop || preview.portalMode)
+        visible: preview.primaryOutput && (preview.hasCrop || preview.portalMode || preview.selectionOnly)
 
         Controls.Label {
             anchors.horizontalCenter: parent.horizontalCenter
-            visible: preview.portalMode
+            visible: preview.portalMode || preview.selectionOnly
             textFormat: Text.PlainText
             width: Math.min(implicitWidth, preview.width - 48)
             wrapMode: Text.Wrap
             padding: 8
             color: "white"
-            text: preview.pointPicker ? qsTr("Click a pixel to share its color with %1.").arg(preview.appName) : preview.desktop ? qsTr("Share your desktop with %1?").arg(preview.appName) : qsTr("Select an area to share with %1.").arg(preview.appName)
+            text: preview.selectionOnly ? qsTr("Drag to select a region. Enter confirms, Esc cancels.") : preview.pointPicker ? qsTr("Click a pixel to share its color with %1.").arg(preview.appName) : preview.desktop ? qsTr("Share your desktop with %1?").arg(preview.appName) : qsTr("Select an area to share with %1.").arg(preview.appName)
 
             background: Rectangle {
                 color: "#242424"
@@ -66,7 +67,7 @@ FrozenOutput {
         Row {
             anchors.horizontalCenter: parent.horizontalCenter
             spacing: 8
-            visible: preview.hasCrop && !preview.pointPicker
+            visible: preview.hasCrop && !preview.pointPicker && !preview.selectionOnly
 
             Repeater {
                 model: [qsTr("Select"), qsTr("Pen"), qsTr("Arrow"), qsTr("Rectangle")]
@@ -96,7 +97,7 @@ FrozenOutput {
             spacing: 8
 
             Repeater {
-                model: preview.hasCrop ? [{
+                model: preview.hasCrop && !preview.selectionOnly ? [{
                     "label": qsTr("Red"),
                     "color": "red"
                 }, {
@@ -140,7 +141,7 @@ FrozenOutput {
             }
 
             Controls.Button {
-                visible: !preview.portalMode
+                visible: !preview.portalMode && !preview.selectionOnly
                 text: qsTr("Copy")
                 enabled: preview.actionsAvailable
                 onClicked: preview.copyRequested()
@@ -148,13 +149,13 @@ FrozenOutput {
 
             Controls.Button {
                 visible: !preview.pointPicker
-                text: preview.desktop ? qsTr("Share Desktop") : preview.portalMode ? qsTr("Share") : qsTr("Save")
+                text: preview.selectionOnly ? qsTr("Confirm") : preview.desktop ? qsTr("Share Desktop") : preview.portalMode ? qsTr("Share") : qsTr("Save")
                 enabled: preview.actionsAvailable
                 onClicked: preview.saveRequested()
             }
 
             Controls.Button {
-                visible: preview.portalMode
+                visible: preview.portalMode || preview.selectionOnly
                 text: qsTr("Cancel")
                 onClicked: preview.cancelRequested()
             }
