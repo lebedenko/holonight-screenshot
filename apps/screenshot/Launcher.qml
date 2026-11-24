@@ -1,35 +1,116 @@
+pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Shapes
+import QtQuick.Templates as T
 
 ApplicationWindow {
     id: root
+    required property var workflow
 
     property int delayChoice: 0
     property bool includeCursor: false
+    readonly property var modes: workflow.modes
     readonly property var delays: [0, 3000, 5000, 10000]
 
-    title: workflow.page === "picker" ? qsTr("Choose a Window") : qsTr("HoloNight Screenshot")
-    visible: workflow.page !== ""
-    width: workflow.page === "preview" ? 680 : 460
-    height: workflow.page === "preview" ? 500 : workflow.page === "picker" ? 380 : Math.max(190, launcher.implicitHeight + 32)
+    title: root.workflow.page === "picker" ? qsTr("Choose a Window") : qsTr("HoloNight Screenshot")
+    visible: root.workflow.page !== ""
+    width: root.workflow.page === "preview" ? 680 : 460
+    height: root.workflow.page === "preview" ? 500 : root.workflow.page === "picker" ? 380 : Math.max(190, launcher.implicitHeight + 32)
     minimumWidth: 400
-    minimumHeight: workflow.page === "launcher" ? launcher.implicitHeight + 32 : 260
+    minimumHeight: root.workflow.page === "launcher" ? launcher.implicitHeight + 32 : 260
     onClosing: function (close) {
-        close.accepted = workflow.page !== "picker";
-        workflow.closeWindow();
+        close.accepted = root.workflow.page !== "picker";
+        root.workflow.closeWindow();
+    }
+
+    component SegmentedBar: Rectangle {
+        Layout.fillWidth: true
+        color: root.palette.button
+        border.color: root.palette.mid
+        radius: 10
+    }
+
+    component LauncherButton: T.Button {
+        id: control
+
+        property string glyph: ""
+        property bool primary: false
+        readonly property bool accented: enabled && (checked || primary)
+        readonly property color foreground: accented ? palette.highlightedText : palette.buttonText
+
+        focusPolicy: Qt.StrongFocus
+        hoverEnabled: true
+        implicitHeight: primary ? 44 : 36
+        implicitWidth: contentItem.implicitWidth + 16
+
+        background: Rectangle {
+            radius: 8
+            color: {
+                if (control.accented)
+                    return control.down ? Qt.tint(control.palette.highlight, Qt.alpha(control.palette.highlightedText, 0.18))
+                                        : control.hovered ? Qt.tint(control.palette.highlight, Qt.alpha(control.palette.highlightedText, 0.09))
+                                                          : control.palette.highlight;
+                if (control.enabled && (control.down || control.hovered))
+                    return Qt.tint(control.palette.button, Qt.alpha(control.palette.buttonText, control.down ? 0.16 : 0.08));
+                return control.primary ? control.palette.button : "transparent";
+            }
+            border.width: control.visualFocus ? 2 : control.primary && !control.enabled ? 1 : 0
+            border.color: control.visualFocus ? (control.accented ? control.palette.highlightedText : control.palette.highlight)
+                                              : control.palette.mid
+        }
+
+        contentItem: Item {
+            implicitWidth: caption.implicitWidth
+            implicitHeight: caption.implicitHeight
+
+            Row {
+                id: caption
+                anchors.centerIn: parent
+                spacing: 8
+
+                Shape {
+                    width: 20
+                    height: 20
+                    anchors.verticalCenter: parent.verticalCenter
+                    visible: control.glyph !== ""
+                    preferredRendererType: Shape.CurveRenderer
+
+                    ShapePath {
+                        fillColor: "transparent"
+                        strokeColor: control.foreground
+                        strokeWidth: 1.6
+                        capStyle: ShapePath.RoundCap
+                        joinStyle: ShapePath.RoundJoin
+
+                        PathSvg {
+                            path: control.glyph
+                        }
+                    }
+                }
+
+                Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: control.text
+                    textFormat: Text.PlainText
+                    color: control.foreground
+                    font: control.font
+                }
+            }
+        }
     }
 
     Shortcut {
         sequence: "Escape"
-        enabled: workflow.page === "picker"
-        onActivated: workflow.cancelPicker()
+        enabled: root.workflow.page === "picker"
+        onActivated: root.workflow.cancelPicker()
     }
 
     Shortcut {
         sequences: ["Return", "Enter"]
-        enabled: workflow.page === "picker"
-        onActivated: workflow.confirmWindow()
+        enabled: root.workflow.page === "picker"
+        onActivated: root.workflow.confirmWindow()
     }
 
     ColumnLayout {
@@ -38,82 +119,126 @@ ApplicationWindow {
         anchors.fill: parent
         anchors.margins: 16
         spacing: 12
-        visible: workflow.page === "launcher"
+        visible: root.workflow.page === "launcher"
 
         ButtonGroup {
             id: targets
         }
 
-        RowLayout {
+        ColumnLayout {
             Layout.fillWidth: true
-            spacing: 5
+            spacing: 4
 
-            Repeater {
-                model: workflow.modes
+            SegmentedBar {
+                implicitHeight: targetRow.implicitHeight + 4
 
-                delegate: ColumnLayout {
-                    id: mode
+                RowLayout {
+                    id: targetRow
+                    anchors.fill: parent
+                    anchors.margins: 2
+                    spacing: 2
 
-                    required property var modelData
+                    Repeater {
+                        model: root.modes.length
 
-                    Layout.fillWidth: true
-                    Layout.preferredWidth: 1
-                    Layout.alignment: Qt.AlignTop
-                    spacing: 4
+                        delegate: LauncherButton {
+                            id: mode
+                            required property int index
+                            readonly property var modelData: root.modes[index]
 
-                    Button {
-                        Layout.fillWidth: true
-                        text: mode.modelData.name === "area" ? qsTr("Region") : mode.modelData.name === "window" ? qsTr("Window") : qsTr("Screen")
-                        checkable: true
-                        checked: workflow.target === mode.modelData.name
-                        highlighted: checked
-                        enabled: mode.modelData.reason === ""
-                        ButtonGroup.group: targets
-                        onClicked: workflow.selectMode(mode.modelData.name)
+                            objectName: "target-" + modelData.name
+                            Layout.fillWidth: true
+                            Layout.minimumWidth: 0
+                            Layout.preferredWidth: 1
+                            text: modelData.name === "area" ? qsTr("Region") : modelData.name === "window" ? qsTr("Window") : qsTr("Screen")
+                            glyph: modelData.name === "area" ? "M2 7 V3 H7 M13 3 H18 V7 M18 13 V17 H13 M7 17 H2 V13"
+                                 : modelData.name === "window" ? "M3 3 H17 V17 H3 Z M3 7 H17"
+                                 : "M2 3 H18 V14 H2 Z M10 14 V18 M6 18 H14"
+                            checkable: true
+                            checked: root.workflow.target === modelData.name
+                            enabled: modelData.reason === ""
+                            Accessible.description: modelData.reason
+                            ButtonGroup.group: targets
+                            onClicked: root.workflow.selectMode(modelData.name)
+                        }
                     }
+                }
+            }
 
-                    Label {
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.leftMargin: 2
+                Layout.rightMargin: 2
+                spacing: 2
+
+                Repeater {
+                    model: root.modes.length
+
+                    delegate: Item {
+                        id: reasonCell
+                        required property int index
+                        readonly property var modelData: root.modes[index]
+
                         Layout.fillWidth: true
-                        visible: text !== ""
-                        text: mode.modelData.reason
-                        textFormat: Text.PlainText
-                        wrapMode: Text.WordWrap
+                        Layout.preferredWidth: 1
+                        Layout.alignment: Qt.AlignTop
+                        implicitHeight: reason.visible ? reason.implicitHeight : 0
+
+                        Label {
+                            id: reason
+                            width: parent.width
+                            visible: text !== ""
+                            text: reasonCell.modelData.reason
+                            textFormat: Text.PlainText
+                            wrapMode: Text.Wrap
+                            horizontalAlignment: Text.AlignHCenter
+                        }
                     }
                 }
             }
         }
 
-        RowLayout {
-            Layout.fillWidth: true
+        SegmentedBar {
+            implicitHeight: delayRow.implicitHeight + 4
 
-            Label {
-                Layout.fillWidth: true
-                text: qsTr("Capture delay")
-            }
+            RowLayout {
+                id: delayRow
+                anchors.fill: parent
+                anchors.margins: 2
+                spacing: 2
 
-            ButtonGroup {
-                id: delayButtons
-            }
+                Label {
+                    Layout.fillWidth: true
+                    Layout.leftMargin: 8
+                    text: qsTr("Capture delay")
+                }
 
-            Repeater {
-                model: [qsTr("None"), qsTr("3 s"), qsTr("5 s"), qsTr("10 s")]
+                ButtonGroup {
+                    id: delayButtons
+                }
 
-                delegate: Button {
-                    required property int index
-                    required property string modelData
+                Repeater {
+                    model: [qsTr("None"), qsTr("3 s"), qsTr("5 s"), qsTr("10 s")]
 
-                    Layout.minimumWidth: 54
-                    text: modelData
-                    checkable: true
-                    checked: root.delayChoice === index
-                    highlighted: checked
-                    ButtonGroup.group: delayButtons
-                    onClicked: root.delayChoice = index
+                    delegate: LauncherButton {
+                        required property int index
+                        required property string modelData
+
+                        objectName: "delay-" + index
+                        Layout.preferredWidth: 60
+                        implicitHeight: 32
+                        text: modelData
+                        checkable: true
+                        checked: root.delayChoice === index
+                        ButtonGroup.group: delayButtons
+                        onClicked: root.delayChoice = index
+                    }
                 }
             }
         }
 
         CheckBox {
+            objectName: "include-cursor"
             text: qsTr("Include mouse cursor")
             checked: root.includeCursor
             onToggled: root.includeCursor = checked
@@ -122,7 +247,7 @@ ApplicationWindow {
         Label {
             Layout.fillWidth: true
             visible: text !== ""
-            text: launcher.visible ? workflow.message : ""
+            text: launcher.visible ? root.workflow.message : ""
             textFormat: Text.PlainText
             wrapMode: Text.Wrap
         }
@@ -131,12 +256,14 @@ ApplicationWindow {
             Layout.fillHeight: true
         }
 
-        Button {
+        LauncherButton {
+            objectName: "capture"
             Layout.fillWidth: true
             text: qsTr("Capture")
-            highlighted: true
-            enabled: workflow.target !== ""
-            onClicked: workflow.startCapture(root.delays[root.delayChoice], root.includeCursor)
+            primary: true
+            glyph: "M2 6 H6 L8 3 H12 L14 6 H18 V17 H2 Z M13 11 A3 3 0 1 1 7 11 A3 3 0 1 1 13 11 Z"
+            enabled: root.workflow.target !== ""
+            onClicked: root.workflow.startCapture(root.delays[root.delayChoice], root.includeCursor)
         }
     }
 
@@ -144,7 +271,7 @@ ApplicationWindow {
         anchors.fill: parent
         anchors.margins: 16
         spacing: 10
-        visible: workflow.page === "picker"
+        visible: root.workflow.page === "picker"
 
         Label {
             text: qsTr("Choose a window to capture")
@@ -157,7 +284,7 @@ ApplicationWindow {
 
             Accessible.name: qsTr("Open windows")
             clip: true
-            model: workflow.windows
+            model: root.workflow.windows
             keyNavigationEnabled: false
 
             activeFocusOnTab: true
@@ -165,14 +292,14 @@ ApplicationWindow {
                 Qt.callLater(forceActiveFocus)
             onCountChanged: Qt.callLater(revealSelection)
 
-            Keys.onUpPressed: workflow.moveSelection(-1)
-            Keys.onDownPressed: workflow.moveSelection(1)
+            Keys.onUpPressed: root.workflow.moveSelection(-1)
+            Keys.onDownPressed: root.workflow.moveSelection(1)
 
             ScrollBar.vertical: ScrollBar {}
 
             function revealSelection() {
                 for (let i = 0; i < count; ++i) {
-                    if (model[i].id === workflow.selectedWindow) {
+                    if (model[i].id === root.workflow.selectedWindow) {
                         positionViewAtIndex(i, ListView.Contain);
                         return;
                     }
@@ -180,32 +307,33 @@ ApplicationWindow {
             }
 
             Connections {
-                target: workflow
+                target: root.workflow
                 function onSelectionChanged() {
                     Qt.callLater(picker.revealSelection);
                 }
             }
 
             delegate: ItemDelegate {
+                id: windowDelegate
                 required property var modelData
 
                 width: ListView.view.width
                 text: (modelData.title || qsTr("Untitled window")) + (modelData.appName ? "\n" + modelData.appName : "")
-                highlighted: workflow.selectedWindow === modelData.id
+                highlighted: root.workflow.selectedWindow === modelData.id
                 Accessible.selected: highlighted
                 contentItem: Label {
-                    text: parent.text
+                    text: windowDelegate.text
                     textFormat: Text.PlainText
                     elide: Text.ElideRight
                     maximumLineCount: 2
                 }
                 onClicked: {
-                    workflow.selectWindow(modelData.id);
+                    root.workflow.selectWindow(modelData.id);
                     picker.forceActiveFocus();
                 }
                 onDoubleClicked: {
-                    workflow.selectWindow(modelData.id);
-                    workflow.confirmWindow();
+                    root.workflow.selectWindow(modelData.id);
+                    root.workflow.confirmWindow();
                 }
             }
 
@@ -221,14 +349,14 @@ ApplicationWindow {
 
             Button {
                 text: qsTr("Cancel")
-                onClicked: workflow.cancelPicker()
+                onClicked: root.workflow.cancelPicker()
             }
 
             Button {
                 text: qsTr("Capture")
                 highlighted: true
-                enabled: workflow.selectedWindow !== ""
-                onClicked: workflow.confirmWindow()
+                enabled: root.workflow.selectedWindow !== ""
+                onClicked: root.workflow.confirmWindow()
             }
         }
     }
@@ -237,14 +365,14 @@ ApplicationWindow {
         anchors.fill: parent
         anchors.margins: 16
         spacing: 12
-        visible: workflow.page === "preview"
+        visible: root.workflow.page === "preview"
 
         Image {
             Layout.fillWidth: true
             Layout.fillHeight: true
             Layout.preferredHeight: 1
             fillMode: Image.PreserveAspectFit
-            source: workflow.page === "preview" ? "image://capture/" + workflow.revision : ""
+            source: root.workflow.page === "preview" ? "image://capture/" + root.workflow.revision : ""
             sourceSize.width: width
             sourceSize.height: height
             cache: false
@@ -254,7 +382,7 @@ ApplicationWindow {
         Label {
             Layout.fillWidth: true
             visible: text !== ""
-            text: workflow.page === "preview" ? workflow.message : ""
+            text: root.workflow.page === "preview" ? root.workflow.message : ""
             textFormat: Text.PlainText
             wrapMode: Text.Wrap
         }
@@ -264,7 +392,7 @@ ApplicationWindow {
 
             Button {
                 text: qsTr("New Capture")
-                onClicked: workflow.newCapture()
+                onClicked: root.workflow.newCapture()
             }
 
             Item {
@@ -273,13 +401,13 @@ ApplicationWindow {
 
             Button {
                 text: qsTr("Copy")
-                onClicked: workflow.copy()
+                onClicked: root.workflow.copy()
             }
 
             Button {
                 text: qsTr("Save…")
                 highlighted: true
-                onClicked: workflow.save()
+                onClicked: root.workflow.save()
             }
         }
     }

@@ -11,7 +11,6 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QQmlApplicationEngine>
-#include <QQmlContext>
 #include <QQuickImageProvider>
 #include <QSettings>
 #include <QStandardPaths>
@@ -74,7 +73,7 @@ bool Workflow::loadUi() {
     return window_ != nullptr;
   }
   engine_ = std::make_unique<QQmlApplicationEngine>();
-  engine_->rootContext()->setContextProperty(QStringLiteral("workflow"), this);
+  engine_->setInitialProperties({{QStringLiteral("workflow"), QVariant::fromValue(static_cast<QObject*>(this))}});
   engine_->addImageProvider(QStringLiteral("capture"), new PreviewImage(result_));
   engine_->load(QUrl(QStringLiteral("qrc:/screenshot/Launcher.qml")));
   if (!engine_->rootObjects().isEmpty()) {

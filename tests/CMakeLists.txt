@@ -34,3 +34,10 @@ if(NOT SCREENSHOT_USE_INSTALLED_CAPTURE)
   add_test(NAME session COMMAND session-test)
   set_tests_properties(session PROPERTIES TIMEOUT 20)
 endif()
+
+add_executable(launcher-test launcher_test.cpp ../apps/screenshot/launcher.qrc)
+set_target_properties(launcher-test PROPERTIES AUTORCC ON)
+target_link_libraries(launcher-test PRIVATE Qt6::QuickControls2 Qt6::Test)
+add_test(NAME launcher COMMAND launcher-test)
+set_tests_properties(launcher PROPERTIES TIMEOUT 15
+  ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORMTHEME=;QT_QUICK_CONTROLS_STYLE=Basic")
