@@ -22,12 +22,14 @@ class GrimAcquisition final : public DesktopAcquisition {
 
  private:
   enum class Stage { Ready, Before, Capture, After, Done, Verifying };
+  void queryLayout();
   void run(const QString& program, const QStringList& arguments, int timeoutMs);
   void finished(int exitCode, QProcess::ExitStatus status);
   void fail(const QString& reason);
   void stop();
   void publishFailure();
 
+  const bool wlr_;
   QProcess process_;
   QTimer timeout_;
   Stage stage_ = Stage::Ready;

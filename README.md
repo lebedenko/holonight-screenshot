@@ -1,6 +1,6 @@
 # HoloNight Screenshot
 
-A standalone Qt command-line utility that captures a Hyprland desktop to a PNG. The default saves the full desktop without opening a window. Live capture requires `hyprctl` and `grim` on PATH in the Hyprland session. The raster geometry follows grim 1.5.0.
+A standalone Qt command-line utility that captures a Hyprland, Sway, or labwc desktop to a PNG. The default saves the full desktop without opening a window. Live capture requires `grim` on PATH, plus `hyprctl` in Hyprland or `wlr-randr` with JSON support in Sway and labwc. The raster geometry follows grim 1.5.0.
 
 Build on the host with CMake 3.25+, Ninja, Task, a C++23 compiler and Qt 6.11+ (Core, Gui, Widgets, Quick, Quick Controls, Wayland Client, and Test for the development preset). Install the Wayland component of HoloNight Qt so CMake can resolve `HolonightQt::Wayland`. If several installs are present, set `HolonightQt_DIR` to the package directory containing the Wayland component.
 

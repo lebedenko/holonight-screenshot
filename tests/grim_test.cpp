@@ -36,6 +36,8 @@ class GrimTest final : public QObject {
     directory_ = std::make_unique<QTemporaryDir>();
     QVERIFY(directory_->isValid());
     previousPath_ = qgetenv("PATH");
+    previousDesktop_ = qgetenv("XDG_CURRENT_DESKTOP");
+    qputenv("XDG_CURRENT_DESKTOP", "Hyprland");
     qputenv("PATH", QFile::encodeName(directory_->path()));
     qputenv("FIXTURE", QFile::encodeName(directory_->path()));
     QVERIFY(writeFile(path("before"), layout));
@@ -66,6 +68,11 @@ exec /bin/cat "$FIXTURE/frame.png"
   void cleanup() {
     qputenv("PATH", previousPath_);
     qunsetenv("FIXTURE");
+    if (previousDesktop_.isNull()) {
+      qunsetenv("XDG_CURRENT_DESKTOP");
+    } else {
+      qputenv("XDG_CURRENT_DESKTOP", previousDesktop_);
+    }
     directory_.reset();
   }
 
@@ -107,6 +114,58 @@ exec /bin/cat "$FIXTURE/frame.png"
     QCOMPARE(crop.pixelColor(0, 0), QColor(Qt::red));
     QCOMPARE(crop.pixelColor(1, 0), QColor(Qt::blue));
     QCOMPARE(crop.colorSpace(), frame.colorSpace());
+  }
+
+  void wlrLayout_data() {
+    QTest::addColumn<QByteArray>("desktop");
+    QTest::newRow("sway") << QByteArray("sway");
+    QTest::newRow("labwc") << QByteArray("wlroots:labwc");
+  }
+
+  void wlrLayout() {
+    QFETCH(QByteArray, desktop);
+    qputenv("XDG_CURRENT_DESKTOP", desktop);
+    constexpr auto outputs = R"([
+      {"name":"left","enabled":true,"position":{"x":-1280,"y":-3},"transform":"normal","scale":1,
+       "modes":[{"width":1280,"height":3,"refresh":60,"current":true}]},
+      {"name":"off","enabled":false},
+      {"name":"right","enabled":true,"position":{"x":0,"y":-2},"transform":"90","scale":1.5,
+       "modes":[{"width":6,"height":4,"refresh":60,"current":true}]}
+    ])";
+    QVERIFY(writeFile(path("outputs"), outputs));
+    QVERIFY(writeFile(path("wlr-randr"), R"(#!/bin/sh
+[ "$*" = "--json" ] || exit 1
+printf 'layout\n' >> "$FIXTURE/wlr-queries"
+exec /bin/cat "$FIXTURE/outputs"
+)"));
+    GrimAcquisition acquisition;
+    QSignalSpy frames(&acquisition, &DesktopAcquisition::captured);
+    QSignalSpy verified(&acquisition, &GrimAcquisition::layoutVerified);
+    QSignalSpy changed(&acquisition, &GrimAcquisition::layoutVerificationFailed);
+    acquisition.start(CursorPolicy::Exclude);
+    QTRY_COMPARE(frames.size(), 1);
+    const auto& frame = get<CaptureFrame>(frames.first().first());
+    QVERIFY(frame.desktopMapping());
+    QCOMPARE(frame.desktopMapping()->outputs.at(1).logicalBounds, QRectF(0, -2, 2, 4));
+    RegionSelection selection;
+    selection.begin({0.4, -1.1}, frame);
+    selection.release({-0.6, -1.6});
+    const auto crop = selection.confirm(frame);
+    QCOMPARE(crop.size(), QSize(2, 1));
+    QCOMPARE(crop.pixelColor(0, 0), QColor(Qt::red));
+    QCOMPARE(crop.pixelColor(1, 0), QColor(Qt::blue));
+
+    acquisition.verifyLayout();
+    QTRY_COMPARE(verified.size(), 1);
+    QByteArray moved(outputs);
+    moved.replace("\"x\":0", "\"x\":1");
+    QVERIFY(writeFile(path("outputs"), moved));
+    acquisition.verifyLayout();
+    QTRY_COMPARE(changed.size(), 1);
+
+    QFile queries(path("wlr-queries"));
+    QVERIFY(queries.open(QIODevice::ReadOnly));
+    QCOMPARE(queries.readAll(), QByteArray("layout\nlayout\nlayout\nlayout\n"));
   }
 
   void rejectsFailedCapture_data() {
@@ -175,6 +234,7 @@ exec /bin/cat "$FIXTURE/frame.png"
 
   std::unique_ptr<QTemporaryDir> directory_;
   QByteArray previousPath_;
+  QByteArray previousDesktop_;
 };
 
 QTEST_GUILESS_MAIN(GrimTest)
