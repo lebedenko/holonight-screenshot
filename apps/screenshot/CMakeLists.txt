@@ -8,3 +8,4 @@ target_compile_definitions(holonight-screenshot PRIVATE SCREENSHOT_VERSION="${PR
 target_link_libraries(holonight-screenshot PRIVATE HolonightScreenshot::Capture screenshot-output)
 install(TARGETS holonight-screenshot RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(FILES org.holonight.Screenshot.desktop DESTINATION "${CMAKE_INSTALL_DATADIR}/applications")
+install(FILES holonight-screenshot.svg DESTINATION "${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps")

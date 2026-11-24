@@ -2,6 +2,7 @@
 
 #include <QApplication>
 #include <QCommandLineParser>
+#include <QIcon>
 #include <QStandardPaths>
 #include <QTextStream>
 #include <QTimer>
@@ -127,6 +128,7 @@ int main(int argc, char** argv) {
   qputenv("QT_WAYLAND_USE_BYPASSWINDOWMANAGERHINT", "1");
   // The layer-shell singleton still needs the display at static destruction.
   static auto* const app = new QApplication(appArgc, appArgv);
+  app->setWindowIcon(QIcon(QStringLiteral(":/screenshot/holonight-screenshot.svg")));
   const auto desktopId = QStringLiteral("org.holonight.Screenshot");
   if (!QStandardPaths::locate(QStandardPaths::ApplicationsLocation, desktopId + ".desktop").isEmpty()) {
     app->setDesktopFileName(desktopId);
