@@ -50,4 +50,6 @@ Press the shortcut and open a menu within three seconds, then repeat while hover
 hyprctl eval 'hl.unbind("SUPER + SHIFT + F10")'
 ```
 
-The controller contract, coordinate convention and subsequent milestones are described in the [capture design](docs/capture.md). Licensed under GPL-3.0-or-later.
+The controller contract, coordinate convention and subsequent milestones are described in the [capture design](docs/capture.md). The [AI-DLC workflow](docs/aidlc/README.md) explains how to spec, implement, and verify changes.
+
+Licensed under GPL-3.0-or-later.
