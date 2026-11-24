@@ -9,9 +9,9 @@ Build on the host with CMake 3.25+, Ninja, Task, C and C++23 compilers, `wayland
 ```sh
 task build
 task test
-build/dev/apps/screenshot/holonight-screenshot --help
-build/dev/apps/screenshot/holonight-screenshot --version
-task build PRESET=release
+task run
+task run -- --help
+task run PRESET=release -- --version
 ```
 
 ## Command line

@@ -3,10 +3,17 @@ vars:
   PRESET: '{{default "dev" .PRESET}}'
 tasks:
   build:
+    desc: Configure and build with the selected CMake preset (default dev)
     cmds:
       - cmake --preset {{.PRESET}}
       - cmake --build --preset {{.PRESET}}
+  run:
+    desc: Build and launch HoloNight Screenshot (pass app arguments after --)
+    cmds:
+      - task: build
+      - '"build/{{.PRESET}}/apps/screenshot/holonight-screenshot" {{.CLI_ARGS}}'
   test:
+    desc: Build the dev preset and run CTest (pass CTest arguments after --)
     cmds:
       - task: build
         vars:
