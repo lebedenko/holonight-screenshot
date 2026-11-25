@@ -10,14 +10,17 @@
 #include <QGuiApplication>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QProcess>
 #include <QQmlApplicationEngine>
 #include <QQuickImageProvider>
 #include <QSettings>
 #include <QStandardPaths>
 #include <QTextStream>
+#include <QTimer>
 #include <QWindow>
 
 #include <algorithm>
+#include <functional>
 #include <utility>
 
 namespace screenshot {
@@ -42,6 +45,48 @@ QString applicationName(const QString& appId) {
   const QSettings desktopEntry(path, QSettings::IniFormat);
   const auto name = desktopEntry.value("Desktop Entry/Name").toString();
   return name.isEmpty() ? appId : name;
+}
+
+void suppressHyprlandCloseAnimation(QObject* context, std::function<void(bool)> done) {
+  auto* process = new QProcess(context);
+  const auto selector = QStringLiteral("pid:%1").arg(QCoreApplication::applicationPid());
+  const auto applyLegacy = [process, selector](const QString& property) {
+    process->start(QStringLiteral("hyprctl"), {QStringLiteral("setprop"), selector, property, QStringLiteral("1")});
+  };
+  const auto finish = [process, done = std::move(done)](bool ok) {
+    process->deleteLater();
+    done(ok);
+  };
+  auto* deadline = new QTimer(process);
+  deadline->setSingleShot(true);
+  QObject::connect(deadline, &QTimer::timeout, process, &QProcess::kill);
+  QObject::connect(
+      process, &QProcess::finished, process,
+      [process, deadline, applyLegacy, finish, legacyAttempt = 0](int code, QProcess::ExitStatus status) mutable {
+        const auto reply = process->readAllStandardOutput().trimmed();
+        if (deadline->isActive() && status == QProcess::NormalExit) {
+          if (code == 0 && reply == "ok") {
+            finish(true);
+            return;
+          }
+          // Hyprland used two property spellings before switching to Lua dispatchers.
+          if (legacyAttempt < 2) {
+            applyLegacy(++legacyAttempt == 1 ? QStringLiteral("no_anim") : QStringLiteral("noanim"));
+            return;
+          }
+        }
+        finish(false);
+      });
+  QObject::connect(process, &QProcess::errorOccurred, process, [finish](QProcess::ProcessError error) {
+    if (error == QProcess::FailedToStart) {
+      finish(false);
+    }
+  });
+  deadline->start(2000);
+  process->start(
+      QStringLiteral("hyprctl"),
+      {QStringLiteral("dispatch"),
+       QStringLiteral(R"(hl.dsp.window.set_prop({ window = "%1", prop = "no_anim", value = "1" }))").arg(selector)});
 }
 
 class PreviewImage final : public QQuickImageProvider {
@@ -231,15 +276,29 @@ void Workflow::cancelPicker() {
 }
 
 void Workflow::captureAfterHide(const QString& id) {
-  const auto selected = id;
-  setPage({});
-  CaptureSession::afterHide(this, [this, selected](bool synced) {
-    if (synced) {
-      capture(selected);
-    } else {
-      failed(QStringLiteral("The compositor did not acknowledge hiding the capture window."));
-    }
-  });
+  const auto hide = [this, id] {
+    setPage({});
+    CaptureSession::afterHide(this, [this, id](bool synced) {
+      if (synced) {
+        capture(id);
+      } else {
+        failed(QStringLiteral("The compositor did not acknowledge hiding the capture window."));
+      }
+    });
+  };
+  // The desktop grab includes Hyprland's closing snapshot even after the surface has unmapped.
+  // A window-ID capture reads the selected surface directly.
+  if (id.isEmpty() && session_.capabilities().focus == FocusLookup::Hyprland) {
+    suppressHyprlandCloseAnimation(this, [this, hide](bool suppressed) {
+      if (suppressed) {
+        hide();
+      } else {
+        failed(QStringLiteral("Could not disable the screenshot window's closing animation in Hyprland."));
+      }
+    });
+  } else {
+    hide();
+  }
 }
 
 void Workflow::capture(const QString& id) {
