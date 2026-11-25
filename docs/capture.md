@@ -24,7 +24,7 @@ The session keeps foreign toplevel handles alive, publishes title and app ID upd
 
 The launcher first appears at its normal size with Region, Window, Screen, and Capture disabled. Delay and cursor controls are usable during discovery. When discovery completes, the launcher enables supported targets and selects the first available in Region, Screen, Window order. Capture stays disabled if none are available. Unavailable targets expose explanations in hover tooltips and accessible descriptions without changing the layout.
 
-The launcher holds one capture at a time. A failure returns to the launcher with a diagnostic, and cancellation restores its prior options. Launcher Region uses the selection-only overlay and returns the crop to the shared Screen, Window, and Region preview. The CLI Region workflow retains its annotation and direct Copy and Save actions.
+The launcher holds one capture at a time. A failure returns to the launcher with a diagnostic, and cancellation restores its prior options. Launcher-wide diagnostics appear in a scrollable popover opened by the warning button beside Include mouse cursor. The button uses the live HoloNight warning color when available and the window text color otherwise. Launcher Region uses the selection-only overlay and returns the crop to the shared Screen, Window, and Region preview. The CLI Region workflow retains its annotation and direct Copy and Save actions.
 
 ## Frame coordinates
 

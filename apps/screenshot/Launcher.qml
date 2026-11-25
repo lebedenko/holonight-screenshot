@@ -13,6 +13,19 @@ ApplicationWindow {
     property bool includeCursor: false
     readonly property var modes: workflow.modes
     readonly property var delays: [0, 3000, 5000, 10000]
+    readonly property string diagnostic: workflow.page === "launcher" ? workflow.message : ""
+    property var warningPalette: null
+
+    Component.onCompleted: {
+        // Keep the optional import isolated from the launcher, and retain the live binding.
+        try {
+            warningPalette = Qt.createQmlObject(
+                'import QtQml; import Holonight.Core; QtObject { readonly property var warning: typeof HoloniightPalette === "undefined" ? undefined : HoloniightPalette.warning }',
+                root, "WarningPalette");
+        } catch (error) {
+            // Standalone installations can use the window palette.
+        }
+    }
 
     title: root.workflow.page === "picker" ? qsTr("Choose a Window") : qsTr("HoloNight Screenshot")
     visible: root.workflow.page !== ""
@@ -39,6 +52,7 @@ ApplicationWindow {
         property bool primary: false
         readonly property bool accented: enabled && (checked || primary)
         readonly property color foreground: accented ? palette.highlightedText : palette.buttonText
+        property color glyphColor: foreground
 
         focusPolicy: Qt.StrongFocus
         hoverEnabled: true
@@ -79,7 +93,7 @@ ApplicationWindow {
 
                     ShapePath {
                         fillColor: "transparent"
-                        strokeColor: control.foreground
+                        strokeColor: control.glyphColor
                         strokeWidth: 1.6
                         capStyle: ShapePath.RoundCap
                         joinStyle: ShapePath.RoundJoin
@@ -218,19 +232,66 @@ ApplicationWindow {
             }
         }
 
-        CheckBox {
-            objectName: "include-cursor"
-            text: qsTr("Include mouse cursor")
-            checked: root.includeCursor
-            onToggled: root.includeCursor = checked
-        }
-
-        Label {
+        Item {
+            id: cursorRow
             Layout.fillWidth: true
-            visible: text !== ""
-            text: launcher.visible ? root.workflow.message : ""
-            textFormat: Text.PlainText
-            wrapMode: Text.Wrap
+            implicitHeight: cursor.implicitHeight
+
+            CheckBox {
+                id: cursor
+                objectName: "include-cursor"
+                text: qsTr("Include mouse cursor")
+                checked: root.includeCursor
+                onToggled: root.includeCursor = checked
+            }
+
+            LauncherButton {
+                id: detailsButton
+                objectName: "capture-details-button"
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                height: cursorRow.height
+                visible: root.diagnostic !== ""
+                glyph: "M10 2 L18.5 17 H1.5 Z M10 7 V11 M10 14 V14.2"
+                glyphColor: root.warningPalette?.warning ?? root.palette.windowText
+                Accessible.name: qsTr("Show capture details")
+                ToolTip.text: Accessible.name
+                ToolTip.delay: 500
+                ToolTip.visible: hovered && !details.opened
+                onClicked: details.open()
+                onVisibleChanged: if (!visible)
+                    details.close()
+            }
+
+            Popup {
+                id: details
+                objectName: "capture-details-popup"
+                x: cursorRow.width - width
+                y: -height - 4
+                width: Math.min(cursorRow.width, 360)
+                padding: 12
+                focus: true
+                closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+
+                contentItem: ScrollView {
+                    objectName: "capture-details-scroll"
+                    clip: true
+                    contentWidth: availableWidth
+                    implicitHeight: Math.min(diagnosticLabel.implicitHeight,
+                                             Math.max(0, cursorRow.y - details.topPadding - details.bottomPadding))
+                    ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                    ScrollBar.vertical.policy: ScrollBar.AsNeeded
+
+                    Label {
+                        id: diagnosticLabel
+                        objectName: "capture-diagnostic"
+                        width: details.availableWidth - 12
+                        text: root.diagnostic
+                        textFormat: Text.PlainText
+                        wrapMode: Text.Wrap
+                    }
+                }
+            }
         }
 
         Item {

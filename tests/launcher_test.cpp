@@ -16,14 +16,13 @@ class FakeWorkflow final : public QObject {
   Q_PROPERTY(QString page MEMBER page NOTIFY pageChanged)
   Q_PROPERTY(QString target MEMBER target NOTIFY modesChanged)
   Q_PROPERTY(QVariantList modes READ modes NOTIFY modesChanged)
-  Q_PROPERTY(QString message MEMBER message CONSTANT)
+  Q_PROPERTY(QString message READ message NOTIFY messageChanged)
   Q_PROPERTY(QVariantList windows MEMBER windows CONSTANT)
   Q_PROPERTY(QString selectedWindow MEMBER selectedWindow CONSTANT)
 
  public:
   QString page = QStringLiteral("launcher");
   QString target;
-  QString message;
   QVariantList windows;
   QString selectedWindow;
   int delay = -1;
@@ -67,12 +66,21 @@ class FakeWorkflow final : public QObject {
     emit pageChanged();
   }
 
+  QString message() const { return diagnostic; }
+
+  void setMessage(const QString& value) {
+    diagnostic = value;
+    emit messageChanged();
+  }
+
  signals:
   void pageChanged();
   void modesChanged();
   void selectionChanged();
+  void messageChanged();
 
  private:
+  QString diagnostic;
   QStringList supported;
   bool ready = false;
 };
@@ -173,6 +181,99 @@ class LauncherTest final : public QObject {
       auto* tooltip = button->parentItem()->findChild<QObject*>("availability-tooltip");
       QTRY_VERIFY(tooltip->property("opened").toBool());
     }
+  }
+
+  void diagnosticPopover() {
+    FakeWorkflow workflow;
+    workflow.publish({"screen"}, "screen");
+    QQmlEngine engine;
+    QQmlComponent component(&engine, QUrl(QStringLiteral("qrc:/screenshot/Launcher.qml")));
+    std::unique_ptr<QObject> launcher(
+        component.createWithInitialProperties({{"workflow", QVariant::fromValue(&workflow)}}));
+    QVERIFY2(launcher, qPrintable(component.errorString()));
+    auto* window = qobject_cast<QQuickWindow*>(launcher.get());
+    QVERIFY(window);
+    window->setWidth(window->minimumWidth());
+    QVERIFY(QTest::qWaitForWindowActive(window));
+    auto* capture = findItem(window->contentItem(), "capture");
+    auto* cursor = findItem(window->contentItem(), "include-cursor");
+    auto* button = findItem(window->contentItem(), "capture-details-button");
+    auto* popup = launcher->findChild<QObject*>("capture-details-popup");
+    QVERIFY(capture && cursor && button && popup);
+    QVERIFY(!button->isVisible());
+    QCOMPARE(window->width(), window->minimumWidth());
+    if (launcher->property("warningPalette").value<QObject*>() == nullptr) {
+      auto* palette = launcher->property("palette").value<QObject*>();
+      QVERIFY(palette);
+      QCOMPARE(button->property("glyphColor").value<QColor>(), palette->property("windowText").value<QColor>());
+    }
+
+    QSignalSpy frames(window, &QQuickWindow::afterAnimating);
+    window->requestUpdate();
+    QTRY_VERIFY(!frames.isEmpty());
+    const auto size = window->size();
+    const auto minimumHeight = window->minimumHeight();
+    const auto capturePosition = capture->mapToScene({});
+    QSignalSpy heights(window, &QQuickWindow::heightChanged);
+    QSignalSpy widths(window, &QQuickWindow::widthChanged);
+    QSignalSpy minimumHeights(window, &QQuickWindow::minimumHeightChanged);
+    QSignalSpy captureMoves(capture, &QQuickItem::yChanged);
+    const auto opened = [popup] { return popup->property("opened").toBool(); };
+    const auto checkGeometry = [&] {
+      QCOMPARE(window->size(), size);
+      QCOMPARE(window->minimumHeight(), minimumHeight);
+      QCOMPARE(capture->mapToScene({}), capturePosition);
+      QVERIFY(heights.isEmpty() && widths.isEmpty() && minimumHeights.isEmpty() && captureMoves.isEmpty());
+    };
+
+    for (const auto& message : {QString("Capture failed"), QString("Capture failed\n") + QString(160, 'W') +
+                                                               QString("A second line of details.\n").repeated(20)}) {
+      workflow.setMessage(message);
+      QTRY_VERIFY(button->isVisible());
+      auto* accessible = QAccessible::queryAccessibleInterface(button);
+      QVERIFY(accessible);
+      QCOMPARE(accessible->text(QAccessible::Name), QString("Show capture details"));
+      checkGeometry();
+
+      cursor->forceActiveFocus(Qt::TabFocusReason);
+      QTest::keyClick(window, Qt::Key_Tab);
+      QTRY_VERIFY(button->hasActiveFocus());
+      QVERIFY(button->property("visualFocus").toBool());
+      QTest::keyClick(window, Qt::Key_Space);
+      QTRY_VERIFY(opened());
+      auto* label = findItem(window->contentItem(), "capture-diagnostic");
+      auto* scroll = findItem(window->contentItem(), "capture-details-scroll");
+      QVERIFY(label && scroll);
+      QCOMPARE(label->property("text").toString(), message);
+      if (message.contains('\n')) {
+        QVERIFY(label->property("lineCount").toInt() > message.count('\n') + 1);
+        QVERIFY(scroll->property("contentHeight").toReal() > scroll->height());
+      }
+      checkGeometry();
+      QTest::keyClick(window, Qt::Key_Escape);
+      QTRY_VERIFY(!opened());
+      QTRY_VERIFY(button->hasActiveFocus());
+      checkGeometry();
+
+      QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier,
+                        button->mapToScene(button->boundingRect().center()).toPoint());
+      QTRY_VERIFY(opened());
+      workflow.setMessage({});
+      QTRY_VERIFY(!opened() && !button->isVisible());
+      checkGeometry();
+    }
+
+    workflow.setMessage("Capture failed");
+    button->forceActiveFocus(Qt::TabFocusReason);
+    QTest::keyClick(window, Qt::Key_Space);
+    QTRY_VERIFY(opened());
+    QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, QPoint(1, window->height() - 1));
+    QTRY_VERIFY(!opened());
+    button->forceActiveFocus(Qt::TabFocusReason);
+    QTest::keyClick(window, Qt::Key_Space);
+    QTRY_VERIFY(opened());
+    workflow.setPage({});
+    QTRY_VERIFY(!opened() && !window->isVisible());
   }
 
   void interactionAndLivePalette() {
