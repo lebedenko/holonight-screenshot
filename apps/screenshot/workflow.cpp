@@ -130,9 +130,9 @@ void Workflow::start() {
 QVariantList Workflow::modes() const {
   QVariantList modes;
   for (auto mode : {CaptureTarget::Area, CaptureTarget::Window, CaptureTarget::Screen}) {
-    modes.append(QVariantMap{
-        {"name", targetName(mode)},
-        {"reason", ready_ ? session_.capabilities().reason(mode) : QStringLiteral("Checking availability…")}});
+    modes.append(QVariantMap{{"name", targetName(mode)},
+                             {"available", ready_ && session_.capabilities().supports(mode)},
+                             {"reason", ready_ ? session_.capabilities().reason(mode) : QString()}});
   }
   return modes;
 }

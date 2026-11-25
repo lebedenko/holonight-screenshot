@@ -13,6 +13,7 @@
 #include <QTemporaryDir>
 #include <QtTest>
 
+#include <signal.h>
 #include <sys/socket.h>
 #include <unistd.h>
 #include <wayland-server-core.h>
@@ -223,6 +224,74 @@ class SessionTest final : public QObject {
     QJsonArray supported;
     for (const auto& name : expected) supported.append(name);
     QCOMPARE(cli.readAllStandardOutput().trimmed(), QJsonDocument(supported).toJson(QJsonDocument::Compact));
+  }
+
+  void slowProbe() {
+    Registry registry;
+    registry.advertiseWindows(true);
+    registry.advertise(sourceProtocol);
+    registry.advertise(imageProtocol);
+    const auto release = helpers.filePath("release");
+    const auto script = QByteArray("while [ ! -e '") + QFile::encodeName(release) +
+                        "' ]; do /usr/bin/sleep 0.02; done\necho '  -T <identifier>'";
+    QVERIFY(writeHelper(QDir(helpers.path()), "grim", script));
+    QVERIFY(registry.connectInProcess());
+
+    CaptureSession session;
+    QSignalSpy discovered(&session, &CaptureSession::discovered);
+    session.discover();
+    session.discover();
+    QTRY_COMPARE(session.windows().size(), 2);
+    QVERIFY(discovered.isEmpty());
+    QFile gate(release);
+    QVERIFY(gate.open(QIODevice::WriteOnly));
+    gate.close();
+    QTRY_COMPARE(discovered.size(), 1);
+    QVERIFY(session.capabilities().supports(CaptureTarget::Window));
+    session.discover();
+    QTest::qWait(50);
+    QCOMPARE(discovered.size(), 1);
+  }
+
+  void probeDeadline() {
+    Registry registry;
+    registry.advertiseWindows(false);
+    registry.advertise(sourceProtocol);
+    registry.advertise(imageProtocol);
+    QVERIFY(writeHelper(QDir(helpers.path()), "grim", "exec /usr/bin/sleep 30"));
+    QVERIFY(registry.connectInProcess());
+
+    CaptureSession session;
+    QSignalSpy discovered(&session, &CaptureSession::discovered);
+    session.discover();
+    QTRY_COMPARE_WITH_TIMEOUT(discovered.size(), 1, 3500);
+    QCOMPARE(session.capabilities().reason(CaptureTarget::Window), QString("grim with -T support is required."));
+  }
+
+  void shutdownDuringProbe() {
+    Registry registry;
+    const auto pidPath = helpers.filePath("probe.pid");
+    const auto script = QByteArray("echo $$ > '") + QFile::encodeName(pidPath) + "'\nexec /usr/bin/sleep 30";
+    QVERIFY(writeHelper(QDir(helpers.path()), "grim", script));
+    QVERIFY(registry.connectInProcess());
+
+    auto session = std::make_unique<CaptureSession>();
+    QSignalSpy discovered(session.get(), &CaptureSession::discovered);
+    session->discover();
+    QTRY_VERIFY(QFileInfo(pidPath).size() > 0);
+    QFile pidFile(pidPath);
+    QVERIFY(pidFile.open(QIODevice::ReadOnly));
+    const auto pid = pidFile.readAll().trimmed().toInt();
+    QVERIFY(pid > 0);
+    QCOMPARE(kill(pid, 0), 0);
+    QElapsedTimer shutdown;
+    shutdown.start();
+    session.reset();
+    QVERIFY(shutdown.elapsed() < 1000);
+    QCOMPARE(kill(pid, 0), -1);
+    QCOMPARE(errno, ESRCH);
+    QCoreApplication::processEvents();
+    QVERIFY(discovered.isEmpty());
   }
 
   void windowCapture() {

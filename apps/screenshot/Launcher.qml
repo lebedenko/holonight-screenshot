@@ -125,73 +125,54 @@ ApplicationWindow {
             id: targets
         }
 
-        ColumnLayout {
-            Layout.fillWidth: true
-            spacing: 4
-
-            SegmentedBar {
-                implicitHeight: targetRow.implicitHeight + 4
-
-                RowLayout {
-                    id: targetRow
-                    anchors.fill: parent
-                    anchors.margins: 2
-                    spacing: 2
-
-                    Repeater {
-                        model: root.modes.length
-
-                        delegate: LauncherButton {
-                            id: mode
-                            required property int index
-                            readonly property var modelData: root.modes[index]
-
-                            objectName: "target-" + modelData.name
-                            Layout.fillWidth: true
-                            Layout.minimumWidth: 0
-                            Layout.preferredWidth: 1
-                            text: modelData.name === "area" ? qsTr("Region") : modelData.name === "window" ? qsTr("Window") : qsTr("Screen")
-                            glyph: modelData.name === "area" ? "M2 7 V3 H7 M13 3 H18 V7 M18 13 V17 H13 M7 17 H2 V13"
-                                 : modelData.name === "window" ? "M3 3 H17 V17 H3 Z M3 7 H17"
-                                 : "M2 3 H18 V14 H2 Z M10 14 V18 M6 18 H14"
-                            checkable: true
-                            checked: root.workflow.target === modelData.name
-                            enabled: modelData.reason === ""
-                            Accessible.description: modelData.reason
-                            ButtonGroup.group: targets
-                            onClicked: root.workflow.selectMode(modelData.name)
-                        }
-                    }
-                }
-            }
+        SegmentedBar {
+            implicitHeight: targetRow.implicitHeight + 4
 
             RowLayout {
-                Layout.fillWidth: true
-                Layout.leftMargin: 2
-                Layout.rightMargin: 2
+                id: targetRow
+                anchors.fill: parent
+                anchors.margins: 2
                 spacing: 2
 
                 Repeater {
                     model: root.modes.length
 
                     delegate: Item {
-                        id: reasonCell
+                        id: targetCell
                         required property int index
                         readonly property var modelData: root.modes[index]
 
                         Layout.fillWidth: true
+                        Layout.minimumWidth: 0
                         Layout.preferredWidth: 1
-                        Layout.alignment: Qt.AlignTop
-                        implicitHeight: reason.visible ? reason.implicitHeight : 0
+                        implicitHeight: mode.implicitHeight
 
-                        Label {
-                            id: reason
-                            width: parent.width
-                            visible: text !== ""
-                            text: reasonCell.modelData.reason
-                            textFormat: Text.PlainText
-                            wrapMode: Text.Wrap
-                            horizontalAlignment: Text.AlignHCenter
+                        HoverHandler {
+                            id: targetHover
+                            enabled: !targetCell.modelData.available && targetCell.modelData.reason !== ""
+                        }
+
+                        ToolTip {
+                            objectName: "availability-tooltip"
+                            visible: targetHover.hovered
+                            delay: 500
+                            text: targetCell.modelData.reason
+                        }
+
+                        LauncherButton {
+                            id: mode
+                            anchors.fill: parent
+                            objectName: "target-" + targetCell.modelData.name
+                            text: targetCell.modelData.name === "area" ? qsTr("Region") : targetCell.modelData.name === "window" ? qsTr("Window") : qsTr("Screen")
+                            glyph: targetCell.modelData.name === "area" ? "M2 7 V3 H7 M13 3 H18 V7 M18 13 V17 H13 M7 17 H2 V13"
+                                 : targetCell.modelData.name === "window" ? "M3 3 H17 V17 H3 Z M3 7 H17"
+                                 : "M2 3 H18 V14 H2 Z M10 14 V18 M6 18 H14"
+                            checkable: true
+                            checked: root.workflow.target === targetCell.modelData.name
+                            enabled: targetCell.modelData.available
+                            Accessible.description: targetCell.modelData.reason
+                            ButtonGroup.group: targets
+                            onClicked: root.workflow.selectMode(targetCell.modelData.name)
                         }
                     }
                 }

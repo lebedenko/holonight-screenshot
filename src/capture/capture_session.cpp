@@ -10,6 +10,7 @@
 #include <QSet>
 #include <QSocketNotifier>
 #include <QStandardPaths>
+#include <QThread>
 #include <QTimer>
 #include <QtGui/qguiapplication_platform.h>
 
@@ -31,7 +32,70 @@ wl_display* qtDisplay() {
   return native ? native->display() : nullptr;
 }
 
-bool installed(const QString& command) { return !QStandardPaths::findExecutable(command).isEmpty(); }
+struct HelperCapabilities {
+  bool grim = false;
+  bool grimToplevel = false;
+  bool hyprctl = false;
+  bool swaymsg = false;
+  bool wlrRandr = false;
+};
+
+class HelperDiscovery final : public QObject {
+ public:
+  explicit HelperDiscovery(std::function<void(HelperCapabilities)> done) : done_(std::move(done)) {}
+
+  ~HelperDiscovery() override {
+    if (probe_.state() != QProcess::NotRunning) {
+      probe_.disconnect(this);
+      probe_.kill();
+      probe_.waitForFinished(-1);
+    }
+  }
+
+  void start() {
+    if (QThread::currentThread()->isInterruptionRequested()) {
+      return;
+    }
+    const auto grim = QStandardPaths::findExecutable(QStringLiteral("grim"));
+    helpers_.grim = !grim.isEmpty();
+    helpers_.hyprctl = installed(QStringLiteral("hyprctl"));
+    helpers_.swaymsg = installed(QStringLiteral("swaymsg"));
+    helpers_.wlrRandr = installed(QStringLiteral("wlr-randr"));
+    if (!helpers_.grim) {
+      finish();
+      return;
+    }
+
+    probe_.setProcessChannelMode(QProcess::MergedChannels);
+    connect(&probe_, &QProcess::finished, this, [this](int, QProcess::ExitStatus status) {
+      static const QRegularExpression option(QStringLiteral(R"((?:^|\n)\s*-T(?:\s|,|$))"));
+      helpers_.grimToplevel =
+          status == QProcess::NormalExit && option.match(QString::fromLocal8Bit(probe_.readAll())).hasMatch();
+      finish();
+    });
+    connect(&probe_, &QProcess::errorOccurred, this, [this](QProcess::ProcessError error) {
+      if (error == QProcess::FailedToStart) {
+        finish();
+      }
+    });
+    QTimer::singleShot(2000, Qt::PreciseTimer, this, [this] { probe_.kill(); });
+    probe_.start(grim, {QStringLiteral("-h")}, QIODevice::ReadOnly);
+  }
+
+ private:
+  static bool installed(const QString& helper) { return !QStandardPaths::findExecutable(helper).isEmpty(); }
+
+  void finish() {
+    if (!QThread::currentThread()->isInterruptionRequested()) {
+      done_(helpers_);
+    }
+    QThread::currentThread()->quit();
+  }
+
+  std::function<void(HelperCapabilities)> done_;
+  HelperCapabilities helpers_;
+  QProcess probe_{this};
+};
 
 class DisplaySync final : public QObject {
  public:
@@ -145,7 +209,9 @@ struct CaptureSession::State {
     capabilities.unavailable.fill(QStringLiteral("Checking availability…"));
   }
   ~State() {
-    helper.disconnect(&owner);
+    helperThread.requestInterruption();
+    helperThread.quit();
+    helperThread.wait();
     delete read;
     delete write;
     delete syncContext;
@@ -190,9 +256,9 @@ struct CaptureSession::State {
     const bool sway = swayDesktop || !qEnvironmentVariableIsEmpty("SWAYSOCK");
     capabilities.wlrLayout = !hypr && (has("zwlr_output_manager_v1") || sway || labwc);
 
-    if (hypr && installed("hyprctl")) {
+    if (hypr && helpers.hyprctl) {
       capabilities.focus = FocusLookup::Hyprland;
-    } else if (!hypr && !labwc && sway && installed("swaymsg")) {
+    } else if (!hypr && !labwc && sway && helpers.swaymsg) {
       capabilities.focus = FocusLookup::Sway;
     }
 
@@ -200,7 +266,7 @@ struct CaptureSession::State {
     QString window;
     if (!connectionError.isEmpty()) {
       screen = window = connectionError;
-    } else if (!installed("grim")) {
+    } else if (!helpers.grim) {
       screen = window = QStringLiteral("grim is required.");
     } else {
       if (!has("zwlr_screencopy_manager_v1") &&
@@ -208,13 +274,13 @@ struct CaptureSession::State {
         screen = QStringLiteral("The compositor does not provide output capture.");
       } else if (capabilities.wlrLayout && !has("zwlr_output_manager_v1")) {
         screen = QStringLiteral("The compositor does not provide output layout.");
-      } else if (!installed(capabilities.wlrLayout ? "wlr-randr" : "hyprctl")) {
+      } else if (!(capabilities.wlrLayout ? helpers.wlrRandr : helpers.hyprctl)) {
         screen =
             capabilities.wlrLayout ? QStringLiteral("wlr-randr is required.") : QStringLiteral("hyprctl is required.");
       }
       if (!list || !has(toplevelSource) || !has(copyManager)) {
         window = QStringLiteral("The compositor does not provide window capture.");
-      } else if (!grimToplevel) {
+      } else if (!helpers.grimToplevel) {
         window = QStringLiteral("grim with -T support is required.");
       }
     }
@@ -297,26 +363,20 @@ struct CaptureSession::State {
       return;
     }
     started = true;
-    helper.setProcessChannelMode(QProcess::MergedChannels);
-    QObject::connect(&helper, &QProcess::finished, &owner, [this](int, QProcess::ExitStatus status) {
-      static const QRegularExpression option(QStringLiteral(R"((?:^|\n)\s*-T(?:\s|,|$))"));
-      grimToplevel =
-          status == QProcess::NormalExit && option.match(QString::fromLocal8Bit(helper.readAll())).hasMatch();
-      helperReady = true;
-      publish();
+    auto* worker = new HelperDiscovery([this](HelperCapabilities result) {
+      QMetaObject::invokeMethod(
+          &owner,
+          [this, result] {
+            helpers = result;
+            helperReady = true;
+            publish();
+          },
+          Qt::QueuedConnection);
     });
-    QObject::connect(&helper, &QProcess::errorOccurred, &owner, [this](QProcess::ProcessError error) {
-      if (error == QProcess::FailedToStart) {
-        helperReady = true;
-        publish();
-      }
-    });
-    helper.start(QStringLiteral("grim"), {QStringLiteral("-h")}, QIODevice::ReadOnly);
-    QTimer::singleShot(2000, &owner, [this] {
-      if (helper.state() != QProcess::NotRunning) {
-        helper.kill();
-      }
-    });
+    worker->moveToThread(&helperThread);
+    QObject::connect(&helperThread, &QThread::started, worker, &HelperDiscovery::start, Qt::QueuedConnection);
+    QObject::connect(&helperThread, &QThread::finished, worker, &QObject::deleteLater);
+    helperThread.start();
 
     display = qtDisplay();
     if (!display) {
@@ -383,11 +443,11 @@ struct CaptureSession::State {
   QSocketNotifier* read = nullptr;
   QSocketNotifier* write = nullptr;
   QObject* syncContext = nullptr;
-  QProcess helper;
+  QThread helperThread;
+  HelperCapabilities helpers;
   QString connectionError;
   bool ownsDisplay = false;
   bool started = false;
-  bool grimToplevel = false;
   bool registryReady = false;
   bool helperReady = false;
   bool published = false;
