@@ -2,16 +2,21 @@
 #include "capture_session.h"
 #include "grim_acquisition.h"
 #include "toplevel-server.h"
+#include "workflow.h"
 
+#include <QApplication>
 #include <QDir>
 #include <QFile>
+#include <QFileDialog>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QProcess>
+#include <QScopeGuard>
 #include <QSettings>
 #include <QSignalSpy>
 #include <QSocketNotifier>
 #include <QTemporaryDir>
+#include <QTimer>
 #include <QtTest>
 
 #include <signal.h>
@@ -491,6 +496,92 @@ class SessionTest final : public QObject {
     QTRY_VERIFY(captured);
   }
 
+  void launcherRestoresCustomDelayAndCancelsDirectSave() {
+    Registry registry;
+    registry.advertiseWindows(true);
+    registry.advertise(sourceProtocol);
+    registry.advertise(imageProtocol);
+    QVERIFY(writeHelper(QDir(helpers.path()), "grim", grimScript(true)));
+    const auto originalState = qgetenv("XDG_STATE_HOME");
+    const auto restoreState = qScopeGuard([originalState] {
+      if (originalState.isNull()) {
+        qunsetenv("XDG_STATE_HOME");
+      } else {
+        qputenv("XDG_STATE_HOME", originalState);
+      }
+    });
+    QTemporaryDir state;
+    QVERIFY(state.isValid());
+    QVERIFY(qputenv("XDG_STATE_HOME", state.path().toUtf8()));
+    const auto destination = state.filePath("existing.png");
+    QFile existing(destination);
+    QVERIFY(existing.open(QIODevice::WriteOnly));
+    QCOMPARE(existing.write("existing"), 8);
+    existing.close();
+
+    {
+      QVERIFY(registry.connectInProcess());
+      Workflow launcher({});
+      launcher.start();
+      QTRY_COMPARE(launcher.target(), QString("window"));
+      launcher.setDelayMs(2147483647);
+      launcher.setDelayMs(-1);
+      QCOMPARE(launcher.delayMs(), 2147483647);
+    }
+
+    QVERIFY(registry.connectInProcess());
+    Workflow launcher({});
+    launcher.start();
+    QCOMPARE(launcher.delayMs(), 2147483647);
+    QTRY_COMPARE(launcher.target(), QString("window"));
+    bool dialogOpened = false;
+    QTimer::singleShot(0, &launcher, [&] {
+      if (auto* dialog = qobject_cast<QFileDialog*>(QApplication::activeModalWidget())) {
+        dialogOpened = true;
+        dialog->selectFile(destination);
+        dialog->reject();
+      }
+    });
+    launcher.saveDirectly();
+    QVERIFY(dialogOpened);
+    QCOMPARE(launcher.page(), QString("launcher"));
+    QVERIFY(existing.open(QIODevice::ReadOnly));
+    QCOMPARE(existing.readAll(), QByteArray("existing"));
+    launcher.startCapture();
+    QCOMPARE(launcher.page(), QString("picker"));
+  }
+
+  void screenPreviewRoutes_data() {
+    QTest::addColumn<bool>("editor");
+    QTest::addColumn<bool>("fixedPath");
+    QTest::newRow("screen preview") << false << false;
+    QTest::newRow("editor") << true << false;
+    QTest::newRow("editor with destination") << true << true;
+  }
+
+  void screenPreviewRoutes() {
+    QFETCH(bool, editor);
+    QFETCH(bool, fixedPath);
+    Registry registry;
+    registry.advertise(screenProtocol);
+    registry.advertise(layoutProtocol);
+    QVERIFY(writeHelper(QDir(helpers.path()), "wlr-randr", layout));
+    QVERIFY(writeHelper(QDir(helpers.path()), "grim", grimScript(true)));
+    QVERIFY(registry.connectInProcess());
+    const auto destination = helpers.filePath("preview.png");
+    Workflow workflow({.path = fixedPath ? destination : QString(), .target = CaptureTarget::Screen, .editor = editor});
+    workflow.start();
+    QTRY_COMPARE(workflow.page(), QString("preview"));
+    QCOMPARE(workflow.editing(), editor);
+    QCOMPARE(workflow.fixedSavePath(), fixedPath);
+    QVERIFY(!QFileInfo::exists(destination));
+    if (fixedPath) {
+      workflow.save();
+      QCOMPARE(QImage(destination).size(), QSize(1, 1));
+      QCOMPARE(workflow.page(), QString("preview"));
+    }
+  }
+
   void screenOutput() {
     Registry registry;
     registry.advertise(screenProtocol);
@@ -537,5 +628,5 @@ class SessionTest final : public QObject {
 
 }  // namespace
 
-QTEST_GUILESS_MAIN(SessionTest)
+QTEST_MAIN(SessionTest)
 #include "session_test.moc"

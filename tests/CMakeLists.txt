@@ -26,13 +26,17 @@ if(NOT SCREENSHOT_USE_INSTALLED_CAPTURE)
   add_custom_command(OUTPUT "${toplevel_server}"
     COMMAND Wayland::Scanner server-header "${toplevel_protocol}" "${toplevel_server}"
     DEPENDS "${toplevel_protocol}" VERBATIM)
-  add_executable(session-test session_test.cpp "${toplevel_server}")
+  add_executable(session-test session_test.cpp "${toplevel_server}"
+    ../apps/screenshot/workflow.cpp ../apps/screenshot/launcher.qrc)
+  set_target_properties(session-test PROPERTIES AUTORCC ON)
   target_include_directories(session-test PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
-  target_link_libraries(session-test PRIVATE HolonightScreenshot::Capture Qt6::Test Wayland::Server)
+  target_link_libraries(session-test PRIVATE HolonightScreenshot::Capture screenshot-output
+    Qt6::DBus Qt6::Quick Qt6::Test Wayland::Server)
   target_compile_definitions(session-test PRIVATE SCREENSHOT_APP="$<TARGET_FILE:holonight-screenshot>")
   add_dependencies(session-test holonight-screenshot)
   add_test(NAME session COMMAND session-test)
-  set_tests_properties(session PROPERTIES TIMEOUT 20)
+  set_tests_properties(session PROPERTIES TIMEOUT 20
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORMTHEME=")
 endif()
 
 add_executable(launcher-test launcher_test.cpp ../apps/screenshot/launcher.qrc)

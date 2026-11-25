@@ -40,19 +40,21 @@ std::optional<screenshot::Options> parseOptions(int argc, char** argv) {
                                   QStringLiteral("TARGET"));
   const QCommandLineOption list(QStringLiteral("list-targets"),
                                 QStringLiteral("Print supported targets as a JSON array."));
-  parser.addOptions({output, delay, cursor, region, target, list});
+  const QCommandLineOption editor(QStringLiteral("editor"), QStringLiteral("Open the annotation editor."));
+  parser.addOptions({output, delay, cursor, region, target, list, editor});
   parser.process(app);
 
   screenshot::Options options;
   options.path = parser.value(output);
   options.list = parser.isSet(list);
+  options.editor = parser.isSet(editor);
   if (parser.values(output).size() > 1 || (parser.isSet(output) && options.path.isEmpty()) ||
       !parser.positionalArguments().isEmpty()) {
     reportFailure(QStringLiteral("Specify --output PATH at most once. Positional arguments are invalid."));
     return std::nullopt;
   }
   if (options.list && (parser.isSet(output) || parser.isSet(delay) || parser.isSet(cursor) || parser.isSet(region) ||
-                       parser.isSet(target))) {
+                       parser.isSet(target) || options.editor)) {
     reportFailure(QStringLiteral("--list-targets cannot be combined with capture options."));
     return std::nullopt;
   }
@@ -71,12 +73,12 @@ std::optional<screenshot::Options> parseOptions(int argc, char** argv) {
       return std::nullopt;
     }
     options.target = CaptureTarget::Area;
-  } else if (!options.target && (parser.isSet(output) || parser.isSet(delay) || parser.isSet(cursor))) {
+  } else if (!options.target &&
+             (parser.isSet(output) || parser.isSet(delay) || parser.isSet(cursor) || options.editor)) {
     options.target = CaptureTarget::Screen;
   }
-  if ((options.target == CaptureTarget::Screen || options.target == CaptureTarget::ActiveWindow) &&
-      options.path.isEmpty()) {
-    reportFailure(QStringLiteral("Screen and active-window capture require --output PATH."));
+  if (options.target == CaptureTarget::ActiveWindow && options.path.isEmpty() && !options.editor) {
+    reportFailure(QStringLiteral("Active-window capture requires --output PATH or --editor."));
     return std::nullopt;
   }
 
@@ -109,7 +111,10 @@ int main(int argc, char** argv) {
   // Qt must not interpret a destination named like a platform option as an option.
   static int appArgc = 1;
   static char* appArgv[] = {argv[0], nullptr};
-  if (options->list || options->target == CaptureTarget::Screen || options->target == CaptureTarget::ActiveWindow) {
+  const bool headlessSave =
+      !options->editor && !options->path.isEmpty() &&
+      (options->target == CaptureTarget::Screen || options->target == CaptureTarget::ActiveWindow);
+  if (options->list || headlessSave) {
     QCoreApplication app(appArgc, appArgv);
     return run(app, *options);
   }

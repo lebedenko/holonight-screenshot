@@ -1,8 +1,5 @@
 #include "region_selection.h"
 
-#include <QColorTransform>
-#include <QPainter>
-
 #include <algorithm>
 #include <cmath>
 
@@ -76,7 +73,7 @@ bool RegionSelection::begin(QPointF point, const CaptureFrame& frame, bool edita
       const auto original = valid && (edges || rectangle().contains(point)) ? rectangle() : QRectF{};
       edit_.emplace(Edit{point, original, bounds, edges});
     }
-    marks_.clear();
+    annotations_ = {};
     if (!edit_ || edit_->original.isEmpty()) {
       start_ = end_ = point;
     }
@@ -90,7 +87,7 @@ bool RegionSelection::begin(QPointF point, const CaptureFrame& frame, bool edita
     rasterOrigin_ = mapping.rasterEdge({});
     captureScale_ = mapping.captureScale;
     const auto raster = rasterOrigin_ + point * captureScale_;
-    gesture_.emplace(Mark{tool_, color_, tool_ == Tool::Pen ? QPolygonF{raster} : QPolygonF{raster, raster}});
+    return annotations_.begin(static_cast<Annotations::Tool>(tool_), color_, raster);
   }
   return true;
 }
@@ -130,80 +127,24 @@ void RegionSelection::move(QPointF point) {
     end_ = rect.bottomRight();
   } else if (dragging_) {
     end_ = point;
-  } else if (gesture_) {
-    auto& points = gesture_->points;
-    const auto raster = rasterOrigin_ + point * captureScale_;
-    if (gesture_->tool == Tool::Pen) {
-      if (points.back() != raster) {
-        points.append(raster);
-      }
-    } else {
-      points.back() = raster;
-    }
+  } else {
+    annotations_.move(rasterOrigin_ + point * captureScale_);
   }
 }
 
 void RegionSelection::release(QPointF point) {
-  move(point);
-  dragging_ = false;
-  edit_.reset();
-  if (gesture_ && gesture_->hasArea()) {
-    marks_.append(std::move(*gesture_));
+  if (dragging_) {
+    move(point);
+    dragging_ = false;
+    edit_.reset();
+  } else {
+    annotations_.finish(rasterOrigin_ + point * captureScale_);
   }
-  gesture_.reset();
 }
 
 void RegionSelection::undo() {
   if (canUndo()) {
-    marks_.removeLast();
-  }
-}
-
-bool RegionSelection::Mark::hasArea() const {
-  const auto delta = points.back() - points.front();
-  switch (tool) {
-    case Tool::Pen:
-      return true;
-    case Tool::Arrow:
-      return !delta.isNull();
-    case Tool::Rectangle:
-      return delta.x() != 0 && delta.y() != 0;
-    case Tool::Select:
-      return false;
-  }
-  return false;
-}
-
-void RegionSelection::Mark::paint(QPainter& painter, qreal scale, const QColorTransform& colorTransform) const {
-  if (!hasArea()) {
-    return;
-  }
-  painter.setPen(QPen(colorTransform.map(color), 3 * scale, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-  switch (tool) {
-    case Tool::Pen:
-      if (points.size() == 1) {
-        painter.drawPoint(points.front());
-      } else {
-        painter.drawPolyline(points);
-      }
-      break;
-    case Tool::Arrow: {
-      const auto tip = points.back();
-      const auto delta = tip - points.front();
-      const auto length = std::hypot(delta.x(), delta.y());
-      const auto direction = delta / length;
-      const auto head = std::min(12 * scale, length * 0.45);
-      const auto base = tip - direction * head;
-      const QPointF wing(-direction.y() * head * 0.55, direction.x() * head * 0.55);
-      painter.drawLine(points.front(), tip);
-      painter.drawPolyline(QPolygonF{base + wing, tip, base - wing});
-      break;
-    }
-    case Tool::Rectangle:
-      painter.drawRect(QRectF(points.front(), points.back()).normalized());
-      break;
-    case Tool::Select:
-      break;
+    annotations_.undo();
   }
 }
 
@@ -211,8 +152,7 @@ void RegionSelection::cancel() {
   canceled_ = true;
   dragging_ = false;
   edit_.reset();
-  gesture_.reset();
-  marks_.clear();
+  annotations_ = {};
   start_ = end_ = {};
 }
 
@@ -238,23 +178,7 @@ QRect RegionSelection::liveCropRect(const CaptureFrame& frame) const {
 }
 
 void RegionSelection::paintAnnotations(QPainter& painter, const CaptureFrame& frame, bool includeGesture) const {
-  if (marks_.isEmpty() && (!includeGesture || !gesture_)) {
-    return;
-  }
-  const auto colorSpace = frame.colorSpace();
-  const auto colorTransform =
-      colorSpace.isValid() ? QColorSpace(QColorSpace::SRgb).transformationToColorSpace(colorSpace) : QColorTransform();
-  painter.save();
-  painter.setClipRect(cropRect(frame), Qt::IntersectClip);
-  painter.setRenderHint(QPainter::Antialiasing);
-  painter.setBrush(Qt::NoBrush);
-  for (const auto& mark : marks_) {
-    mark.paint(painter, captureScale_, colorTransform);
-  }
-  if (includeGesture && gesture_) {
-    gesture_->paint(painter, captureScale_, colorTransform);
-  }
-  painter.restore();
+  annotations_.paint(painter, cropRect(frame), frame.colorSpace(), captureScale_, includeGesture);
 }
 
 QImage RegionSelection::confirm(const CaptureFrame& frame) const {
@@ -262,16 +186,7 @@ QImage RegionSelection::confirm(const CaptureFrame& frame) const {
   if (dragging() || pixels.isEmpty()) {
     return {};
   }
-  auto crop = frame.image().copy(pixels);
-  if (!crop.isNull() && !marks_.isEmpty()) {
-    if (crop.depth() <= 8 || crop.format() == QImage::Format_CMYK8888) {
-      crop.convertTo(QImage::Format_ARGB32);
-    }
-    QPainter painter(&crop);
-    painter.translate(-pixels.topLeft());
-    paintAnnotations(painter, frame, false);
-  }
-  return crop;
+  return annotations_.render(frame.image().copy(pixels), captureScale_, pixels.topLeft());
 }
 
 }  // namespace screenshot

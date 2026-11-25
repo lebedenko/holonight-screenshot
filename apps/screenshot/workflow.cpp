@@ -15,9 +15,11 @@
 #include <QGuiApplication>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QPainter>
 #include <QProcess>
 #include <QQmlApplicationEngine>
 #include <QQuickImageProvider>
+#include <QScopedValueRollback>
 #include <QSettings>
 #include <QStandardPaths>
 #include <QTextStream>
@@ -33,8 +35,6 @@ namespace screenshot {
 namespace {
 
 constexpr std::array launcherTargets{CaptureTarget::Area, CaptureTarget::Screen, CaptureTarget::Window};
-
-constexpr std::array launcherDelays{0, 3000, 5000, 10000};
 
 QString preferencesPath() {
   const auto stateHome = qEnvironmentVariable("XDG_STATE_HOME");
@@ -138,14 +138,46 @@ class PreviewImage final : public QQuickImageProvider {
     if (size) {
       *size = image_.size();
     }
-    if (requestedSize.isValid() && requestedSize != image_.size()) {
-      return image_.scaled(requestedSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    auto display = image_;
+    if (!requestedSize.isEmpty() && requestedSize != image_.size()) {
+      display = image_.scaled(requestedSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
     }
-    return image_;
+    if (display.colorSpace().isValid() && display.colorSpace() != QColorSpace::SRgb) {
+      display.convertToColorSpace(QColorSpace::SRgb);
+    }
+    return display;
   }
 
  private:
   const QImage& image_;
+};
+
+class AnnotationImage final : public QQuickImageProvider {
+ public:
+  AnnotationImage(const QImage& image, const Annotations& annotations)
+      : QQuickImageProvider(Image), image_(image), annotations_(annotations) {}
+
+  QImage requestImage(const QString&, QSize* size, const QSize& requestedSize) override {
+    const auto rasterSize = requestedSize.isEmpty() ? image_.size() : requestedSize;
+    if (size) {
+      *size = rasterSize;
+    }
+    QImage overlay(rasterSize, QImage::Format_ARGB32_Premultiplied);
+    if (overlay.isNull()) {
+      return {};
+    }
+    overlay.fill(Qt::transparent);
+    if (!image_.isNull() && !annotations_.empty()) {
+      QPainter painter(&overlay);
+      painter.scale(qreal(overlay.width()) / image_.width(), qreal(overlay.height()) / image_.height());
+      annotations_.paint(painter, image_.rect(), QColorSpace::SRgb, 1, true);
+    }
+    return overlay;
+  }
+
+ private:
+  const QImage& image_;
+  const Annotations& annotations_;
 };
 
 }  // namespace
@@ -161,6 +193,7 @@ bool Workflow::loadUi() {
   engine_ = std::make_unique<QQmlApplicationEngine>();
   engine_->setInitialProperties({{QStringLiteral("workflow"), QVariant::fromValue(static_cast<QObject*>(this))}});
   engine_->addImageProvider(QStringLiteral("capture"), new PreviewImage(result_));
+  engine_->addImageProvider(QStringLiteral("annotations"), new AnnotationImage(result_, annotations_));
   engine_->load(QUrl(QStringLiteral("qrc:/screenshot/Launcher.qml")));
   if (!engine_->rootObjects().isEmpty()) {
     window_ = qobject_cast<QWindow*>(engine_->rootObjects().front());
@@ -225,7 +258,7 @@ void Workflow::loadPreferences() {
   savedTarget_ = settings.value("target").toString();
   bool validDelay = false;
   const int delay = settings.value("delayMs").toInt(&validDelay);
-  options_.delayMs = validDelay && std::ranges::find(launcherDelays, delay) != launcherDelays.end() ? delay : 0;
+  options_.delayMs = validDelay && delay >= 0 ? delay : 0;
   options_.cursor =
       settings.value("includeCursor").toString() == "true" ? CursorPolicy::Include : CursorPolicy::Exclude;
   emit preferencesChanged();
@@ -249,7 +282,7 @@ void Workflow::restoreTarget() {
 }
 
 void Workflow::setDelayMs(int delay) {
-  if (!launcher_ || delay == options_.delayMs || std::ranges::find(launcherDelays, delay) == launcherDelays.end()) {
+  if (!launcher_ || delay == options_.delayMs || delay < 0) {
     return;
   }
   options_.delayMs = delay;
@@ -281,10 +314,13 @@ void Workflow::selectMode(const QString& name) {
   }
 }
 
-void Workflow::startCapture() {
-  if (!ready_ || busy_ || !options_.target || !session_.capabilities().supports(*options_.target)) {
+void Workflow::startCapture() { beginCapture(options_.path); }
+
+void Workflow::beginCapture(const QString& path) {
+  if (!ready_ || busy_ || choosingPath_ || !options_.target || !session_.capabilities().supports(*options_.target)) {
     return;
   }
+  options_.path = path;
   busy_ = true;
   setMessage({});
   if (*options_.target == CaptureTarget::Window) {
@@ -296,6 +332,20 @@ void Workflow::startCapture() {
     captureAfterHide();
   } else {
     capture({});
+  }
+}
+
+void Workflow::saveDirectly() {
+  if (!launcher_ || page_ != "launcher" || busy_ || choosingPath_ || !options_.target) {
+    return;
+  }
+  QString path;
+  {
+    const QScopedValueRollback choosing(choosingPath_, true);
+    path = choosePngPath();
+  }
+  if (!path.isEmpty()) {
+    beginCapture(path);
   }
 }
 
@@ -393,54 +443,41 @@ void Workflow::capture(const QString& id) {
 
 void Workflow::captured(const CaptureFrame& frame) {
   if (*options_.target != CaptureTarget::Area) {
-    if (launcher_ || options_.path.isEmpty()) {
-      preview(frame.image());
-    } else if (const auto error = savePng(options_.path, frame.image()); !error.isEmpty()) {
+    handleResult(frame.image());
+    return;
+  }
+
+  overlay_ = std::make_unique<RegionOverlay>(frame, *acquisition_, RegionOverlay::Mode::SelectionOnly);
+  connect(overlay_.get(), &RegionOverlay::failed, this, &Workflow::failed, Qt::QueuedConnection);
+  connect(overlay_.get(), &RegionOverlay::canceled, this, &Workflow::canceled, Qt::QueuedConnection);
+  connect(
+      overlay_.get(), &RegionOverlay::selected, this,
+      [this](RegionOverlay::Action, const QImage& crop) { handleResult(crop); }, Qt::QueuedConnection);
+  overlay_->open();
+}
+
+void Workflow::handleResult(const QImage& image) {
+  if (!options_.editor && !options_.path.isEmpty()) {
+    const auto error = savePng(options_.path, image);
+    if (!error.isEmpty()) {
       failed(error);
+    } else if (launcher_) {
+      releaseCapture();
+      setPage(QStringLiteral("launcher"));
+      notifyPreviewAction(this, tr("Screenshot saved."), {});
     } else {
       QCoreApplication::exit(0);
     }
     return;
   }
 
-  const auto mode = launcher_ ? RegionOverlay::Mode::SelectionOnly : RegionOverlay::Mode::Cli;
-  overlay_ = std::make_unique<RegionOverlay>(frame, *acquisition_, mode);
-  connect(overlay_.get(), &RegionOverlay::failed, this, &Workflow::failed, Qt::QueuedConnection);
-  connect(overlay_.get(), &RegionOverlay::canceled, this, &Workflow::canceled, Qt::QueuedConnection);
-  connect(
-      overlay_.get(), &RegionOverlay::selected, this,
-      [this](RegionOverlay::Action action, const QImage& crop) {
-        if (launcher_) {
-          preview(crop);
-          return;
-        }
-        QString error;
-        if (action == RegionOverlay::Action::Copy) {
-          error = copyPng(crop);
-        } else {
-          const auto path = options_.path.isEmpty() ? choosePngPath() : options_.path;
-          if (path.isEmpty()) {
-            canceled();
-            return;
-          }
-          error = savePng(path, crop);
-        }
-        if (!error.isEmpty()) {
-          failed(error);
-        } else {
-          QCoreApplication::exit(0);
-        }
-      },
-      Qt::QueuedConnection);
-  overlay_->open();
-}
-
-void Workflow::preview(const QImage& image) {
   result_ = image;
   releaseCapture();
   if (loadUi()) {
+    editing_ = options_.editor;
     ++revision_;
     emit previewChanged();
+    updateAnnotations();
     setPage(QStringLiteral("preview"));
   }
 }
@@ -452,6 +489,9 @@ void Workflow::releaseCapture() {
   selectedWindow_.clear();
   emit selectionChanged();
   busy_ = false;
+  if (launcher_) {
+    options_.path.clear();
+  }
 }
 
 void Workflow::failed(const QString& reason) {
@@ -482,26 +522,93 @@ void Workflow::closeWindow() {
 }
 
 void Workflow::newCapture() {
+  if (choosingPath_ || strokeActive()) {
+    return;
+  }
   if (!launcher_) {
     launcher_ = true;
     loadPreferences();
     restoreTarget();
   }
   options_.path.clear();
+  options_.editor = false;
   result_ = {};
+  annotations_ = {};
+  editing_ = false;
+  updateAnnotations();
   setMessage({});
   setPage(QStringLiteral("launcher"));
 }
 
+void Workflow::setEditing(bool editing) {
+  if (page_ == "preview" && !strokeActive() && !choosingPath_) {
+    editing_ = editing;
+    emit annotationChanged();
+  }
+}
+
+void Workflow::beginStroke(int tool, const QColor& color, QPointF point, QRectF bounds) {
+  using Tool = Annotations::Tool;
+  if (page_ == "preview" && editing_ && !choosingPath_ && !bounds.isEmpty() && bounds.contains(point) &&
+      tool >= static_cast<int>(Tool::Pen) && tool <= static_cast<int>(Tool::Rectangle) &&
+      annotations_.begin(static_cast<Tool>(tool), color, Annotations::imagePoint(point, bounds, result_.size()))) {
+    updateAnnotations();
+  }
+}
+
+void Workflow::moveStroke(QPointF point, QRectF bounds) {
+  if (strokeActive() && !bounds.isEmpty()) {
+    annotations_.move(Annotations::imagePoint(point, bounds, result_.size()));
+    updateAnnotations();
+  }
+}
+
+void Workflow::finishStroke(QPointF point, QRectF bounds) {
+  if (strokeActive()) {
+    if (bounds.isEmpty()) {
+      annotations_.cancelStroke();
+    } else {
+      annotations_.finish(Annotations::imagePoint(point, bounds, result_.size()));
+    }
+    updateAnnotations();
+  }
+}
+
+void Workflow::cancelStroke() {
+  if (strokeActive()) {
+    annotations_.cancelStroke();
+    updateAnnotations();
+  }
+}
+
+void Workflow::undo() {
+  if (editing_ && canUndo() && !choosingPath_) {
+    annotations_.undo();
+    updateAnnotations();
+  }
+}
+
+void Workflow::updateAnnotations() {
+  ++annotationRevision_;
+  emit annotationChanged();
+}
+
 void Workflow::copy() {
-  const auto error = copyPng(result_);
+  if (page_ != "preview" || strokeActive() || choosingPath_) {
+    return;
+  }
+  const auto error = copyPng(annotations_.render(result_));
   notifyPreviewAction(this, error.isEmpty() ? tr("Copied to clipboard.") : tr("Could not copy screenshot"), error);
 }
 
 void Workflow::save() {
-  const auto path = choosePngPath();
+  if (page_ != "preview" || strokeActive() || choosingPath_) {
+    return;
+  }
+  const QScopedValueRollback choosing(choosingPath_, true);
+  const auto path = options_.path.isEmpty() ? choosePngPath() : options_.path;
   if (!path.isEmpty()) {
-    const auto error = savePng(path, result_);
+    const auto error = savePng(path, annotations_.render(result_));
     notifyPreviewAction(this, error.isEmpty() ? tr("Screenshot saved.") : tr("Could not save screenshot"), error);
   }
 }

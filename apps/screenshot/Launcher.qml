@@ -126,6 +126,41 @@ ApplicationWindow {
         onActivated: root.workflow.confirmWindow()
     }
 
+    Dialog {
+        id: customDelay
+        objectName: "custom-delay-dialog"
+        anchors.centerIn: parent
+        title: qsTr("Custom capture delay")
+        modal: true
+        standardButtons: Dialog.Ok | Dialog.Cancel
+
+        onOpened: {
+            delayInput.text = String(root.workflow.delayMs);
+            delayInput.forceActiveFocus();
+            delayInput.selectAll();
+        }
+        onAccepted: if (delayInput.validDelay)
+            root.workflow.delayMs = Number(delayInput.text);
+
+        TextField {
+            id: delayInput
+            objectName: "custom-delay-input"
+            readonly property bool validDelay: acceptableInput && Number(text) <= 2147483647
+            Accessible.name: qsTr("Capture delay in milliseconds")
+            placeholderText: qsTr("Milliseconds")
+            validator: RegularExpressionValidator { regularExpression: /[0-9]+/ }
+            inputMethodHints: Qt.ImhDigitsOnly
+            onAccepted: if (validDelay)
+                customDelay.accept()
+        }
+
+        Binding {
+            target: customDelay.standardButton(Dialog.Ok)
+            property: "enabled"
+            value: delayInput.validDelay
+        }
+    }
+
     ColumnLayout {
         id: launcher
 
@@ -228,6 +263,16 @@ ApplicationWindow {
                         onClicked: root.workflow.delayMs = root.delays[index]
                     }
                 }
+                LauncherButton {
+                    objectName: "delay-custom"
+                    implicitHeight: 32
+                    text: qsTr("Custom…")
+                    checked: root.delays.indexOf(root.workflow.delayMs) < 0
+                    Accessible.description: checked ? qsTr("%1 ms").arg(root.workflow.delayMs) : ""
+                    ToolTip.text: Accessible.description
+                    ToolTip.visible: checked && hovered
+                    onClicked: customDelay.open()
+                }
             }
         }
 
@@ -297,25 +342,36 @@ ApplicationWindow {
             Layout.fillHeight: true
         }
 
-        LauncherButton {
-            objectName: "capture"
+        RowLayout {
             Layout.fillWidth: true
-            text: qsTr("Capture")
-            primary: true
-            glyph: "M2 6 H6 L8 3 H12 L14 6 H18 V17 H2 Z M13 11 A3 3 0 1 1 7 11 A3 3 0 1 1 13 11 Z"
-            enabled: root.workflow.target !== ""
-            onEnabledChanged: if (enabled && visible)
-                forceActiveFocus(Qt.TabFocusReason)
-            onVisibleChanged: if (visible && enabled)
-                forceActiveFocus(Qt.TabFocusReason)
-            Keys.onPressed: function (event) {
-                if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-                    event.accepted = true;
-                    if (!event.isAutoRepeat)
-                        click();
-                }
+
+            LauncherButton {
+                objectName: "save-directly"
+                text: qsTr("Save Directly…")
+                enabled: root.workflow.target !== ""
+                onClicked: root.workflow.saveDirectly()
             }
-            onClicked: root.workflow.startCapture()
+
+            LauncherButton {
+                objectName: "capture"
+                Layout.fillWidth: true
+                text: qsTr("Capture")
+                primary: true
+                glyph: "M2 6 H6 L8 3 H12 L14 6 H18 V17 H2 Z M13 11 A3 3 0 1 1 7 11 A3 3 0 1 1 13 11 Z"
+                enabled: root.workflow.target !== ""
+                onEnabledChanged: if (enabled && visible)
+                    forceActiveFocus(Qt.TabFocusReason)
+                onVisibleChanged: if (visible && enabled)
+                    forceActiveFocus(Qt.TabFocusReason)
+                Keys.onPressed: function (event) {
+                    if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                        event.accepted = true;
+                        if (!event.isAutoRepeat)
+                            click();
+                    }
+                }
+                onClicked: root.workflow.startCapture()
+            }
         }
     }
 
@@ -413,26 +469,135 @@ ApplicationWindow {
         }
     }
 
+    Shortcut {
+        sequences: [StandardKey.Copy]
+        enabled: result.visible && !root.workflow.strokeActive
+        onActivated: root.workflow.copy()
+    }
+
+    Shortcut {
+        sequences: [StandardKey.Save]
+        enabled: result.visible && !root.workflow.strokeActive
+        onActivated: root.workflow.save()
+    }
+
+    Shortcut {
+        sequences: [StandardKey.Undo]
+        enabled: result.visible && root.workflow.editing && root.workflow.canUndo
+        onActivated: root.workflow.undo()
+    }
+
     ColumnLayout {
+        id: result
+        property int tool: 1
+        property color ink: "red"
+        readonly property bool canExport: visible && !root.workflow.strokeActive
+
         anchors.fill: parent
         anchors.margins: 16
         spacing: 12
         visible: root.workflow.page === "preview"
 
+        onVisibleChanged: if (!visible) {
+            tool = 1;
+            ink = "red";
+        }
+
+        RowLayout {
+            visible: result.visible && root.workflow.editing
+            enabled: !root.workflow.strokeActive
+
+            Repeater {
+                model: [qsTr("Pen"), qsTr("Arrow"), qsTr("Rectangle")]
+                delegate: Button {
+                    required property int index
+                    required property string modelData
+                    text: modelData
+                    implicitWidth: implicitContentWidth + leftPadding + rightPadding
+                    checked: result.tool === index + 1
+                    onClicked: result.tool = index + 1
+                }
+            }
+
+            Repeater {
+                model: [
+                    { name: qsTr("Red"), color: "red" },
+                    { name: qsTr("Yellow"), color: "yellow" },
+                    { name: qsTr("White"), color: "white" },
+                    { name: qsTr("Black"), color: "black" }
+                ]
+                delegate: Button {
+                    id: swatch
+                    required property var modelData
+                    readonly property color ink: modelData.color
+                    Accessible.name: modelData.name
+                    ToolTip.text: modelData.name
+                    ToolTip.visible: hovered
+                    checked: result.ink === ink
+                    implicitWidth: 30
+                    contentItem: Rectangle {
+                        implicitWidth: 14
+                        implicitHeight: 14
+                        color: swatch.ink
+                        border.color: swatch.palette.mid
+                        radius: 3
+                    }
+                    onClicked: result.ink = ink
+                }
+            }
+
+            Button {
+                text: qsTr("Undo")
+                implicitWidth: implicitContentWidth + leftPadding + rightPadding
+                enabled: result.visible && root.workflow.canUndo
+                onClicked: root.workflow.undo()
+            }
+        }
+
         Image {
+            id: screenshotImage
+            objectName: "screenshot-preview"
             Layout.fillWidth: true
             Layout.fillHeight: true
             Layout.preferredHeight: 1
             fillMode: Image.PreserveAspectFit
-            source: root.workflow.page === "preview" ? "image://capture/" + root.workflow.revision : ""
+            source: result.visible ? "image://capture/" + root.workflow.revision : ""
             sourceSize.width: width
             sourceSize.height: height
             cache: false
             Accessible.name: qsTr("Screenshot preview")
+
+            readonly property rect imageBounds: Qt.rect((width - paintedWidth) / 2, (height - paintedHeight) / 2,
+                                                        paintedWidth, paintedHeight)
+
+            Image {
+                x: screenshotImage.imageBounds.x
+                y: screenshotImage.imageBounds.y
+                width: screenshotImage.paintedWidth
+                height: screenshotImage.paintedHeight
+                source: result.visible && width > 0 && height > 0
+                        && (root.workflow.canUndo || root.workflow.strokeActive)
+                        ? "image://annotations/" + root.workflow.annotationRevision : ""
+                sourceSize.width: Math.max(1, Math.ceil(width))
+                sourceSize.height: Math.max(1, Math.ceil(height))
+                cache: false
+            }
+
+            MouseArea {
+                anchors.fill: parent
+                enabled: result.visible && root.workflow.editing
+                cursorShape: Qt.CrossCursor
+                onPressed: mouse => root.workflow.beginStroke(result.tool, result.ink, Qt.point(mouse.x, mouse.y),
+                                                              screenshotImage.imageBounds)
+                onPositionChanged: mouse => root.workflow.moveStroke(Qt.point(mouse.x, mouse.y), screenshotImage.imageBounds)
+                onReleased: mouse => root.workflow.finishStroke(Qt.point(mouse.x, mouse.y), screenshotImage.imageBounds)
+                onCanceled: root.workflow.cancelStroke()
+            }
         }
 
         RowLayout {
             Layout.fillWidth: true
+            enabled: result.canExport
 
             Button {
                 text: qsTr("New Capture")
@@ -444,12 +609,17 @@ ApplicationWindow {
             }
 
             Button {
+                text: root.workflow.editing ? qsTr("Done") : qsTr("Edit")
+                onClicked: root.workflow.setEditing(!root.workflow.editing)
+            }
+
+            Button {
                 text: qsTr("Copy")
                 onClicked: root.workflow.copy()
             }
 
             Button {
-                text: qsTr("Save…")
+                text: result.visible && root.workflow.fixedSavePath ? qsTr("Save") : qsTr("Save…")
                 highlighted: true
                 onClicked: root.workflow.save()
             }

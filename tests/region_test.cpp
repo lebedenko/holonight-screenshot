@@ -10,6 +10,36 @@ class RegionTest final : public QObject {
   Q_OBJECT
 
  private slots:
+  void resizedPreviewExportsCommittedMarksAtFullResolution() {
+    QImage source(1200, 600, QImage::Format_RGB32);
+    source.setColorSpace(QColorSpace::DisplayP3);
+    source.fill(Qt::black);
+    Annotations marks;
+    const QRectF initialBounds(20, 60, 600, 300);
+    const QRectF resizedBounds(10, 100, 300, 150);
+    const auto start = Annotations::imagePoint({70, 110}, initialBounds, source.size());
+    const auto end = Annotations::imagePoint({110, 125}, resizedBounds, source.size());
+    QCOMPARE(start, QPointF(100, 100));
+    QCOMPARE(end, QPointF(400, 100));
+
+    QVERIFY(marks.begin(Annotations::Tool::Pen, Qt::red, start));
+    marks.move(end);
+    QVERIFY(marks.active());
+    QVERIFY(!marks.canUndo());
+    QCOMPARE(marks.render(source), source);
+    marks.finish(end);
+
+    const auto rendered = marks.render(source);
+    QCOMPARE(rendered.size(), source.size());
+    QCOMPARE(rendered.colorSpace(), source.colorSpace());
+    auto srgb = rendered.convertedToColorSpace(QColorSpace::SRgb);
+    QVERIFY(srgb.pixelColor(250, 100).red() > 240);
+    QCOMPARE(srgb.pixelColor(250, 110), QColor(Qt::black));
+    QVERIFY(marks.canUndo());
+    marks.undo();
+    QCOMPARE(marks.render(source), source);
+  }
+
   void redrawReplacesReleasedSelection() {
     const auto frame = createFrame();
     RegionSelection selection;

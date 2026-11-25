@@ -1,14 +1,9 @@
 #pragma once
 
+#include "annotations.h"
 #include "capture_frame.h"
 
-#include <QColor>
-#include <QPolygonF>
-
 #include <array>
-
-class QColorTransform;
-class QPainter;
 
 namespace screenshot {
 
@@ -29,8 +24,8 @@ class RegionSelection {
   void setColor(QColor color) { color_ = color; }
   [[nodiscard]] Tool tool() const { return tool_; }
   [[nodiscard]] QColor color() const { return color_; }
-  [[nodiscard]] bool dragging() const { return dragging_ || gesture_.has_value(); }
-  [[nodiscard]] bool canUndo() const { return !dragging() && !marks_.isEmpty(); }
+  [[nodiscard]] bool dragging() const { return dragging_ || annotations_.active(); }
+  [[nodiscard]] bool canUndo() const { return !dragging() && annotations_.canUndo(); }
   void undo();
   void move(QPointF point);
   void release(QPointF point);
@@ -51,18 +46,9 @@ class RegionSelection {
     Qt::Edges edges;
   };
 
-  struct Mark {
-    Tool tool;
-    QColor color;
-    QPolygonF points;
-    [[nodiscard]] bool hasArea() const;
-    void paint(QPainter& painter, qreal scale, const QColorTransform& colorTransform) const;
-  };
-
   Tool tool_ = Tool::Select;
   QColor color_ = Qt::red;
-  QList<Mark> marks_;
-  std::optional<Mark> gesture_;
+  Annotations annotations_;
   QPointF rasterOrigin_;
   qreal captureScale_ = 1;
   std::optional<Edit> edit_;
