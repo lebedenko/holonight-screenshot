@@ -7,7 +7,7 @@ target_include_directories(screenshot-capture PUBLIC
   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>"
   "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/holonight/screenshot>")
 target_link_libraries(screenshot-capture PUBLIC Qt6::Core Qt6::Gui
-  PUBLIC HolonightQt::Wayland PRIVATE Qt6::QuickControls2)
+  PRIVATE Qt6::Quick Qt6::QuickControls2 Wayland::Client LayerShellQt::Interface)
 set_target_properties(screenshot-capture PROPERTIES AUTORCC ON)
 target_sources(screenshot-capture PRIVATE region-preview.qrc)
 

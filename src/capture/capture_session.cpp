@@ -1,11 +1,13 @@
 #include "capture_session.h"
 
 #include "wayland-ext-foreign-toplevel-list-v1-client-protocol.h"
+#include "wayland_display_p.h"
 
 #include <QGuiApplication>
 #include <QHash>
 #include <QProcess>
 #include <QRegularExpression>
+#include <QSet>
 #include <QSocketNotifier>
 #include <QStandardPaths>
 #include <QTimer>
@@ -37,8 +39,12 @@ class DisplaySync final : public QObject {
       : QObject(parent), done_(std::move(done)), callback_(wl_display_sync(display)) {
     static const wl_callback_listener listener{
         [](void* data, wl_callback*, uint32_t) { static_cast<DisplaySync*>(data)->finish(true); }};
-    wl_callback_add_listener(callback_, &listener, this);
-    QTimer::singleShot(2000, this, [this] { finish(false); });
+    if (callback_) {
+      wl_callback_add_listener(callback_, &listener, this);
+      QTimer::singleShot(2000, this, [this] { finish(false); });
+    } else {
+      QTimer::singleShot(0, this, [this] { finish(false); });
+    }
   }
 
   ~DisplaySync() override {
@@ -49,11 +55,13 @@ class DisplaySync final : public QObject {
 
  private:
   void finish(bool ok) {
-    if (!callback_) {
+    if (!done_) {
       return;
     }
-    wl_callback_destroy(callback_);
-    callback_ = nullptr;
+    if (callback_) {
+      wl_callback_destroy(callback_);
+      callback_ = nullptr;
+    }
     deleteLater();
     std::exchange(done_, {})(ok);
   }
@@ -62,7 +70,61 @@ class DisplaySync final : public QObject {
   wl_callback* callback_;
 };
 
+class LayerShellMonitor final : public QObject {
+ public:
+  LayerShellMonitor(wl_display* display, QObject* context, std::function<void(bool)> discovered,
+                    std::function<void()> removed)
+      : QObject(context), registry_(wl_display_get_registry(display)), removed_(std::move(removed)) {
+    static const wl_registry_listener listener{
+        .global =
+            [](void* data, wl_registry*, uint32_t name, const char* interface, uint32_t) {
+              if (QByteArrayView(interface) == "zwlr_layer_shell_v1") {
+                static_cast<LayerShellMonitor*>(data)->globals_.insert(name);
+              }
+            },
+        .global_remove =
+            [](void* data, wl_registry*, uint32_t name) {
+              auto& self = *static_cast<LayerShellMonitor*>(data);
+              const bool removed = self.globals_.remove(name);
+              if (removed && self.ready_) {
+                const auto notify = self.removed_;
+                notify();
+              }
+            }};
+    if (!registry_) {
+      QTimer::singleShot(0, this, [discovered = std::move(discovered)] { discovered(false); });
+      return;
+    }
+    wl_registry_add_listener(registry_, &listener, this);
+    new DisplaySync(display, this, [this, discovered = std::move(discovered)](bool synced) {
+      ready_ = synced && !globals_.isEmpty();
+      discovered(ready_);
+    });
+    wl_display_flush(display);
+  }
+
+  ~LayerShellMonitor() override {
+    if (registry_) {
+      wl_registry_destroy(registry_);
+    }
+  }
+
+ private:
+  wl_registry* registry_;
+  std::function<void()> removed_;
+  QSet<uint32_t> globals_;
+  bool ready_ = false;
+};
+
 }  // namespace
+
+void watchLayerShell(QObject* context, std::function<void(bool)> discovered, std::function<void()> removed) {
+  if (auto* display = qtDisplay()) {
+    new LayerShellMonitor(display, context, std::move(discovered), std::move(removed));
+  } else {
+    QTimer::singleShot(0, context, [discovered = std::move(discovered)] { discovered(false); });
+  }
+}
 
 QString targetName(CaptureTarget target) {
   switch (target) {

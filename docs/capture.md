@@ -32,7 +32,9 @@ A desktop frame also carries the logical output rectangles as displayed, their t
 
 ## Frozen region selection
 
-`--region` opens a Qt Quick overlay on each captured output through the installed `HolonightQt::Wayland` component. The application matches output names and checks logical geometry before opening. Each surface is anchored on four sides with exclusive zone −1 to cover panels. The primary surface has exclusive keyboard input. Drags are enabled after all surfaces configure within two seconds. Output changes, configuration or rendering failures, and unexpected closure retire all overlays together. Qt screen notifications detect visible topology changes, and asynchronous monitor checks compare the full acquisition layout during selection and again after confirmation.
+Region selection asynchronously checks for `zwlr_layer_shell_v1` on Qt's Wayland display before mapping any windows, including when the portal opens `RegionOverlay` directly. The overlay matches captured output names and logical geometry to Qt screens. It initializes every frozen Qt Quick preview before showing the group. Each view gets its own LayerShellQt overlay role, four anchors, and exclusive zone −1 to cover panels. The primary view gets exclusive keyboard focus and secondary views receive no keyboard input. The launcher and save dialog use ordinary Qt window roles.
+
+Escape remains active while the group is opening. Selection starts only after every view is exposed at its captured logical size within the two-second configure deadline. Qt screen notifications and asynchronous layout polling detect topology changes, and confirmation runs a final layout check before returning a result. Protocol removal, output changes, unexpected closure, and QML or rendering failures hide the whole group before the terminal signal and defer destruction of the views.
 
 A left-button drag follows the Wayland implicit pointer grab. Originating-surface coordinates are translated into desktop logical coordinates, so a single rectangle spans outputs. Each view paints its portion of the frozen mosaic with the area outside the selection dimmed. Release leaves the selection visible. Another drag in Select mode replaces the crop and clears all marks. The primary overlay shows Copy and Save for a released rectangle with nonempty area intersecting an output and the raster canvas. Ctrl+C copies. Ctrl+S, Enter, and Return save. Presses on the action buttons go to the controls, while a canvas drag retains its originating surface through release. Esc closes the overlays and exits with status 2.
 
@@ -54,7 +56,7 @@ Install this project to expose `HolonightScreenshot::Capture` through
 `find_package(HolonightScreenshot CONFIG REQUIRED)`. The target provides the
 cancellable controller, compositor layout adapters and Grim acquisition, the frozen
 desktop overlay, the annotation renderer, and PNG encoding. Consumers need
-Qt 6.11 or newer and the installed HolonightQt Wayland component.
+Qt 6.11+, libwayland-client, and LayerShellQt 6.6+. The installed CMake config resolves all targets needed by the static capture library.
 
 The CLI handles arguments, clipboard transfer, and the save dialog. Its
 installed-package build uses `-DSCREENSHOT_USE_INSTALLED_CAPTURE=ON` and a

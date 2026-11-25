@@ -5,7 +5,6 @@
 #include <QPointer>
 #include <QTimer>
 
-#include <holonight/wayland/layersurfacehost.h>
 #include <memory>
 #include <vector>
 
@@ -23,6 +22,7 @@ class RegionOverlay final : public QObject {
   enum class Mode { Cli, Share, PickColor, SelectArea, Desktop, Choice, SelectionOnly };
   RegionOverlay(CaptureFrame frame, GrimAcquisition& acquisition, Mode mode = Mode::Cli);
   RegionOverlay(CaptureFrame frame, GrimAcquisition& acquisition, Mode mode, QString appName);
+  ~RegionOverlay() override;
   void cancel();
   void open();
 
@@ -37,7 +37,10 @@ class RegionOverlay final : public QObject {
 
  private:
   bool eventFilter(QObject* watched, QEvent* event) override;
-  void configured();
+  void openViews();
+  void showLoadedViews();
+  void checkReadiness();
+  void retireViews();
   void redraw();
   void undo();
   void setDesktop(bool desktop);
@@ -48,7 +51,7 @@ class RegionOverlay final : public QObject {
     QScreen* screen;
     QPointer<QQuickItem> preview;
     OutputGeometry output;
-    std::unique_ptr<Holonight::Wayland::LayerSurfaceHost> host;
+    std::unique_ptr<QQuickView> view;
   };
 
   Mode mode_;
@@ -65,6 +68,9 @@ class RegionOverlay final : public QObject {
   std::optional<Action> pendingAction_;
   enum class LayoutCheck { Idle, Polling, Confirming };
   LayoutCheck layoutCheck_ = LayoutCheck::Idle;
+  bool opening_ = false;
+  bool groupShown_ = false;
+  bool closing_ = false;
   bool ready_ = false;
   bool finished_ = false;
 };

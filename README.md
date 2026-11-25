@@ -4,7 +4,7 @@ A Qt Quick screenshot launcher and CLI for Hyprland, Sway, and labwc. Run `holon
 
 The result preview offers **Copy**, **Save…**, and **New Capture**. Copy and Save leave the preview open. The default delay is **None**, and the cursor is excluded.
 
-Build on the host with CMake 3.25+, Ninja, Task, C and C++23 compilers, `wayland-scanner`, the `wayland-protocols` XML files, and Qt 6.11+ (Core, Gui, Widgets, Quick, Quick Controls, Wayland Client, and Test for the development preset). Install the Wayland component of HoloNight Qt so CMake can resolve `HolonightQt::Wayland`. If several installs are present, set `HolonightQt_DIR` to the package directory containing the Wayland component.
+Build on the host with CMake 3.25+, Ninja, Task, pkg-config, C and C++23 compilers, libwayland-client, `wayland-scanner`, the `wayland-protocols` XML files, LayerShellQt 6.6+, and Qt 6.11+ (Core, Gui, Widgets, Quick, Quick Controls, Wayland Client, and Test for the development preset). Screenshot has no HoloNight package dependencies. Region selection also requires the compositor's `zwlr_layer_shell_v1` protocol.
 
 ```sh
 task build

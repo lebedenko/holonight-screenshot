@@ -124,15 +124,12 @@ int main(int argc, char** argv) {
     wl_display_disconnect(display);
   }
   qputenv("QT_QPA_PLATFORM", platform);
-  // The layer-surface host assigns its own role. Qt must honor its bypass flag.
-  qputenv("QT_WAYLAND_USE_BYPASSWINDOWMANAGERHINT", "1");
-  // The layer-shell singleton still needs the display at static destruction.
-  static auto* const app = new QApplication(appArgc, appArgv);
-  app->setWindowIcon(QIcon(QStringLiteral(":/screenshot/holonight-screenshot.svg")));
+  QApplication app(appArgc, appArgv);
+  app.setWindowIcon(QIcon(QStringLiteral(":/screenshot/holonight-screenshot.svg")));
   const auto desktopId = QStringLiteral("org.holonight.Screenshot");
   if (!QStandardPaths::locate(QStandardPaths::ApplicationsLocation, desktopId + ".desktop").isEmpty()) {
-    app->setDesktopFileName(desktopId);
+    app.setDesktopFileName(desktopId);
   }
-  app->setQuitOnLastWindowClosed(false);
-  return run(*app, *options);
+  app.setQuitOnLastWindowClosed(false);
+  return run(app, *options);
 }

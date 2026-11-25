@@ -1,6 +1,7 @@
 #include "region_overlay.h"
 
 #include "grim_acquisition.h"
+#include "wayland_display_p.h"
 
 #include <QGuiApplication>
 #include <QKeyEvent>
@@ -10,6 +11,7 @@
 #include <QQuickView>
 #include <QScreen>
 
+#include <LayerShellQt/Window>
 #include <algorithm>
 
 static void initializePreviewResource() { Q_INIT_RESOURCE(region_preview); }
@@ -17,7 +19,21 @@ static void initializePreviewResource() { Q_INIT_RESOURCE(region_preview); }
 namespace screenshot {
 namespace {
 
-using namespace Holonight::Wayland;
+void configureOverlayView(QQuickView& view, QScreen* screen, bool primary) {
+  using Window = LayerShellQt::Window;
+  view.setScreen(screen);
+  view.setResizeMode(QQuickView::SizeRootObjectToView);
+  view.setColor(Qt::black);
+  auto* role = Window::get(&view);
+  role->setScreen(screen);
+  role->setScope(QStringLiteral("holonight-screenshot"));
+  role->setLayer(Window::LayerOverlay);
+  role->setAnchors(Window::Anchors(Window::AnchorTop) | Window::AnchorBottom | Window::AnchorLeft |
+                   Window::AnchorRight);
+  role->setExclusiveZone(-1);
+  role->setCloseOnDismissed(true);
+  role->setKeyboardInteractivity(primary ? Window::KeyboardInteractivityExclusive : Window::KeyboardInteractivityNone);
+}
 
 class FrozenOutput : public QQuickPaintedItem {
   Q_OBJECT
@@ -118,7 +134,7 @@ RegionOverlay::RegionOverlay(CaptureFrame frame, GrimAcquisition& acquisition, M
     }
   });
   connect(&acquisition_, &GrimAcquisition::layoutVerified, this, [this] {
-    if (finished_) {
+    if (finished_ || closing_) {
       return;
     }
     if (layoutCheck_ == LayoutCheck::Confirming) {
@@ -145,11 +161,32 @@ RegionOverlay::RegionOverlay(CaptureFrame frame, GrimAcquisition& acquisition, M
           [this](const QString& reason) { finish({}, reason); });
   timeout_.setSingleShot(true);
   timeout_.setTimerType(Qt::PreciseTimer);
-  connect(&timeout_, &QTimer::timeout, this,
-          [this] { finish({}, QStringLiteral("Screenshot overlays did not configure within two seconds.")); });
+  connect(&timeout_, &QTimer::timeout, this, [this] {
+    finish({}, groupShown_ ? QStringLiteral("Screenshot overlays did not configure within two seconds.")
+                           : QStringLiteral("Screenshot previews did not load within two seconds."));
+  });
 }
 
+RegionOverlay::~RegionOverlay() { retireViews(); }
+
 void RegionOverlay::open() {
+  if (finished_ || opening_) {
+    return;
+  }
+  opening_ = true;
+  watchLayerShell(
+      this,
+      [this](bool available) {
+        if (available) {
+          openViews();
+        } else {
+          finish({}, QStringLiteral("Could not discover Wayland layer-shell support on the Qt display."));
+        }
+      },
+      [this] { finish({}, QStringLiteral("Wayland layer-shell support disappeared during region selection.")); });
+}
+
+void RegionOverlay::openViews() {
   if (finished_) {
     return;
   }
@@ -171,7 +208,7 @@ void RegionOverlay::open() {
       layoutChanged();
       return;
     }
-    surfaces_.push_back({*match, {}, output, std::make_unique<LayerSurfaceHost>()});
+    surfaces_.push_back({*match, {}, output, std::make_unique<QQuickView>()});
   }
 
   static const auto typeId = qmlRegisterType<FrozenOutput>("Holonight.Screenshot", 1, 0, "FrozenOutput");
@@ -179,33 +216,46 @@ void RegionOverlay::open() {
   connect(qGuiApp, &QGuiApplication::screenAdded, this, layoutChanged);
   connect(qGuiApp, &QGuiApplication::screenRemoved, this, layoutChanged);
   connect(qGuiApp, &QGuiApplication::primaryScreenChanged, this, layoutChanged);
-  timeout_.start(2000);
   for (auto& surface : surfaces_) {
     auto* screen = surface.screen;
-    auto* host = surface.host.get();
+    auto* view = surface.view.get();
     connect(screen, &QScreen::geometryChanged, this, layoutChanged);
     connect(screen, &QScreen::orientationChanged, this, layoutChanged);
-    connect(host, &LayerSurfaceHost::configured, this, &RegionOverlay::configured);
-    connect(host, &LayerSurfaceHost::closed, this,
-            [this] { finish({}, QStringLiteral("A screenshot overlay closed unexpectedly.")); });
-    connect(host, &LayerSurfaceHost::failed, this, [this](const QString& reason) {
-      finish({}, QStringLiteral("Could not open screenshot overlay. %1").arg(reason));
-    });
+    configureOverlayView(*view, screen, screen == QGuiApplication::primaryScreen());
+    view->installEventFilter(this);
+    connect(
+        view, &QQuickView::statusChanged, this,
+        [this](QQuickView::Status status) {
+          if (status == QQuickView::Error) {
+            finish({}, QStringLiteral("Could not load the frozen screenshot preview."));
+          } else if (status == QQuickView::Ready) {
+            showLoadedViews();
+          }
+        },
+        Qt::QueuedConnection);
+    connect(
+        view, &QQuickWindow::sceneGraphError, this,
+        [this](auto, const QString& reason) {
+          finish({}, QStringLiteral("Could not render screenshot overlay. %1").arg(reason));
+        },
+        Qt::QueuedConnection);
+    view->setSource(QUrl(QStringLiteral("qrc:/screenshot/RegionPreview.qml")));
+  }
+  timeout_.start(2000);
+  showLoadedViews();
+}
 
-    LayerSurfaceSpec spec;
-    spec.output = screen;
-    spec.name_space = QStringLiteral("holonight-screenshot");
-    spec.layer = Layer::Overlay;
-    spec.anchors = Anchor::Top | Anchor::Bottom | Anchor::Left | Anchor::Right;
-    spec.exclusive_zone = -1;
-    spec.keyboard_interactivity =
-        screen == QGuiApplication::primaryScreen() ? KeyboardInteractivity::Exclusive : KeyboardInteractivity::None;
-    spec.qml_url = QUrl(QStringLiteral("qrc:/screenshot/RegionPreview.qml"));
-    spec.color = Qt::black;
-    if (!host->open(spec)) {
-      return;
-    }
-    auto* view = host->view();
+void RegionOverlay::showLoadedViews() {
+  if (finished_ || closing_ || groupShown_) {
+    return;
+  }
+  if (!std::ranges::all_of(surfaces_,
+                           [](const auto& surface) { return surface.view->status() == QQuickView::Ready; })) {
+    return;
+  }
+  for (auto& surface : surfaces_) {
+    auto* view = surface.view.get();
+    auto* screen = surface.screen;
     auto* item = qobject_cast<FrozenOutput*>(view->rootObject());
     if (!item) {
       finish({}, QStringLiteral("Could not load the frozen screenshot preview."));
@@ -238,26 +288,27 @@ void RegionOverlay::open() {
       redraw();
     });
     connect(item, &FrozenOutput::undoRequested, this, &RegionOverlay::undo);
-    view->installEventFilter(this);
-    connect(
-        view, &QQuickWindow::sceneGraphError, this,
-        [this](auto, const QString& reason) {
-          finish({}, QStringLiteral("Could not render screenshot overlay. %1").arg(reason));
-        },
-        Qt::QueuedConnection);
   }
+  timeout_.start(2000);
+  for (const auto& surface : surfaces_) {
+    surface.view->show();
+    if (finished_ || closing_) {
+      return;
+    }
+  }
+  groupShown_ = true;
+  checkReadiness();
 }
 
-void RegionOverlay::configured() {
-  if (finished_) {
+void RegionOverlay::checkReadiness() {
+  if (finished_ || closing_ || !groupShown_) {
     return;
   }
   for (const auto& surface : surfaces_) {
-    if (surface.host->state() != LayerSurfaceHost::State::Configured) {
-      return;
-    }
-    if (surface.host->view()->size() != surface.output.logicalBounds.size().toSize()) {
-      finish({}, QStringLiteral("A screenshot overlay does not cover its captured output."));
+    if (!surface.view->isExposed() || surface.view->size() != surface.output.logicalBounds.size().toSize()) {
+      if (ready_) {
+        finish({}, QStringLiteral("A screenshot overlay no longer covers its captured output."));
+      }
       return;
     }
   }
@@ -274,20 +325,35 @@ bool RegionOverlay::eventFilter(QObject* watched, QEvent* event) {
     return false;
   }
   const auto surface =
-      std::ranges::find_if(surfaces_, [watched](const auto& candidate) { return candidate.host->view() == watched; });
+      std::ranges::find_if(surfaces_, [watched](const auto& candidate) { return candidate.view.get() == watched; });
   if (surface == surfaces_.end()) {
     return false;
   }
-  auto* view = surface->host->view();
+  auto* view = surface->view.get();
   switch (event->type()) {
     case QEvent::Close:
     case QEvent::Hide:
-      finish({}, QStringLiteral("A screenshot overlay closed or its output changed."));
-      return true;
+      if (closing_) {
+        return false;
+      }
+      closing_ = true;
+      QMetaObject::invokeMethod(
+          this, [this] { finish({}, QStringLiteral("A screenshot overlay closed or its output changed.")); },
+          Qt::QueuedConnection);
+      return false;
+    case QEvent::Expose:
+    case QEvent::Resize:
+      QMetaObject::invokeMethod(this, &RegionOverlay::checkReadiness, Qt::QueuedConnection);
+      return false;
     case QEvent::KeyPress: {
       const auto* key = static_cast<QKeyEvent*>(event);
+      if (closing_) {
+        return true;
+      }
       if (key->key() == Qt::Key_Escape) {
         cancel();
+      } else if (!ready_) {
+        return true;
       } else if (key->keyCombination() == QKeyCombination(Qt::ControlModifier, Qt::Key_Z)) {
         undo();
       } else if (mode_ == Mode::Cli && key->keyCombination() == QKeyCombination(Qt::ControlModifier, Qt::Key_C)) {
@@ -302,11 +368,18 @@ bool RegionOverlay::eventFilter(QObject* watched, QEvent* event) {
       }
       return true;
     }
+    case QEvent::KeyRelease:
+    case QEvent::ShortcutOverride:
+    case QEvent::Wheel:
+    case QEvent::TouchBegin:
+    case QEvent::TouchUpdate:
+    case QEvent::TouchEnd:
+      return !ready_ || closing_;
     case QEvent::MouseButtonPress:
     case QEvent::MouseButtonDblClick:
     case QEvent::MouseMove:
     case QEvent::MouseButtonRelease: {
-      if (!ready_) {
+      if (!ready_ || closing_) {
         return true;
       }
       const auto* mouse = static_cast<QMouseEvent*>(event);
@@ -355,7 +428,7 @@ bool RegionOverlay::eventFilter(QObject* watched, QEvent* event) {
 }
 
 void RegionOverlay::confirm(Action action) {
-  if (finished_ || !ready_ || pendingAction_ ||
+  if (finished_ || closing_ || !ready_ || pendingAction_ ||
       (action != Action::PickColor && !desktop_ && !selection_.canConfirm(*frame_))) {
     return;
   }
@@ -386,7 +459,7 @@ void RegionOverlay::redraw() {
   const bool hasCrop = !desktop_ && !selection_.cropRect(*frame_).isEmpty();
   const bool actionsAvailable = !pendingAction_ && (desktop_ || selection_.canConfirm(*frame_));
   for (const auto& surface : surfaces_) {
-    auto* item = static_cast<FrozenOutput*>(surface.host->rootObject());
+    auto* item = static_cast<FrozenOutput*>(surface.preview.get());
     item->setSelection(desktop_ ? RegionSelection{} : selection_);
     item->setProperty("desktop", desktop_);
     item->setProperty("hasCrop", hasCrop);
@@ -411,23 +484,7 @@ void RegionOverlay::finish(QImage crop, QString error, QColor color) {
   layoutTimer_.stop();
   acquisition_.cancel();
   frame_.reset();
-  for (const auto& surface : surfaces_) {
-    QPointer<QQuickWindow> window;
-    if (surface.preview) {
-      window = surface.preview->window();
-      static_cast<FrozenOutput*>(surface.preview.get())->clearFrame();
-    }
-    if (window) {
-      window->removeEventFilter(this);
-    }
-    surface.host->close();
-    if (window) {
-      window->setPersistentSceneGraph(false);
-      window->setPersistentGraphics(false);
-      window->hide();
-      window->releaseResources();
-    }
-  }
+  retireViews();
   if (!error.isEmpty()) {
     emit failed(error);
   } else if (color.isValid()) {
@@ -437,6 +494,25 @@ void RegionOverlay::finish(QImage crop, QString error, QColor color) {
   } else {
     emit canceled();
   }
+}
+
+void RegionOverlay::retireViews() {
+  for (auto& surface : surfaces_) {
+    auto* view = surface.view.release();
+    if (!view) {
+      continue;
+    }
+    view->removeEventFilter(this);
+    if (surface.preview) {
+      static_cast<FrozenOutput*>(surface.preview.get())->clearFrame();
+    }
+    view->setPersistentSceneGraph(false);
+    view->setPersistentGraphics(false);
+    view->hide();
+    view->releaseResources();
+    view->deleteLater();
+  }
+  surfaces_.clear();
 }
 
 }  // namespace screenshot
