@@ -26,6 +26,8 @@ The launcher first appears at its normal size with Region, Window, Screen, and C
 
 The launcher holds one capture at a time. A failure returns to the launcher with a diagnostic, and cancellation restores its prior options. Launcher-wide diagnostics appear in a scrollable popover opened by the warning button beside Include mouse cursor. The button uses the live HoloNight warning color when available and the window text color otherwise. Launcher Region uses the selection-only overlay and returns the crop to the shared Screen, Window, and Region preview. The CLI Region workflow retains its annotation and direct Copy and Save actions.
 
+Copy and Save in the shared preview leave it open and send one [desktop notification](https://specifications.freedesktop.org/notification/latest/protocol.html) per completed action. Failures include the output error, and canceling the Save dialog sends no notification. The executable submits notifications asynchronously over the session bus using Qt D-Bus. Delivery errors are logged as warnings without affecting the output or preview.
+
 ## Frame coordinates
 
 The provider supplies upright decoded pixels and their QColorSpace. An invalid color space represents unknown encoding. CaptureFrame takes a private copy of the pixels at acquisition, including when the provider wraps externally owned memory. Consumers receive read-only access to the image. An image-local frame uses top-left image coordinates.

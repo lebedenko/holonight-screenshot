@@ -2,9 +2,9 @@
 
 A Qt Quick screenshot launcher and CLI for Hyprland, Sway, and labwc. Run `holonight-screenshot` without arguments to open the launcher. Choose **Region**, **Window**, or **Screen**, then set a delay and optionally include the mouse cursor. Region captures the desktop first and opens a frozen selection overlay. Drag a rectangle, then press Enter to confirm or Esc to cancel. Window opens a live picker. Use the arrow keys to select a window and Enter to confirm. Screen captures the entire desktop across all outputs.
 
-The result preview offers **Copy**, **Save…**, and **New Capture**. Copy and Save leave the preview open. The default delay is **None**, and the cursor is excluded.
+The result preview offers **Copy**, **Save…**, and **New Capture**. Copy and Save report their results through desktop notifications and leave the preview open. The default delay is **None**, and the cursor is excluded.
 
-Build on the host with CMake 3.25+, Ninja, Task, pkg-config, C and C++23 compilers, libwayland-client, `wayland-scanner`, the `wayland-protocols` XML files, LayerShellQt 6.6+, and Qt 6.11+ (Core, Gui, Widgets, Quick, Quick Controls, Wayland Client, and Test for the development preset). Screenshot has no HoloNight package dependencies. Region selection also requires the compositor's `zwlr_layer_shell_v1` protocol.
+Build on the host with CMake 3.25+, Ninja, Task, pkg-config, C and C++23 compilers, libwayland-client, `wayland-scanner`, the `wayland-protocols` XML files, LayerShellQt 6.6+, and Qt 6.11+ (Core, D-Bus, Gui, Widgets, Quick, Quick Controls, Wayland Client, and Test for the development preset). Screenshot has no HoloNight package dependencies. Region selection also requires the compositor's `zwlr_layer_shell_v1` protocol.
 
 ```sh
 task build

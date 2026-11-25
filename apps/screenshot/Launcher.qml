@@ -431,14 +431,6 @@ ApplicationWindow {
             Accessible.name: qsTr("Screenshot preview")
         }
 
-        Label {
-            Layout.fillWidth: true
-            visible: text !== ""
-            text: root.workflow.page === "preview" ? root.workflow.message : ""
-            textFormat: Text.PlainText
-            wrapMode: Text.Wrap
-        }
-
         RowLayout {
             Layout.fillWidth: true
 

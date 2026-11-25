@@ -6,6 +6,10 @@
 #include "region_overlay.h"
 
 #include <QCoreApplication>
+#include <QDBusConnection>
+#include <QDBusMessage>
+#include <QDBusPendingCallWatcher>
+#include <QDBusPendingReply>
 #include <QDir>
 #include <QFileInfo>
 #include <QGuiApplication>
@@ -52,6 +56,22 @@ void savePreference(const QString& key, const QVariant& value) {
 void exitWithError(const QString& reason) {
   QTextStream(stderr) << reason << Qt::endl;
   QCoreApplication::exit(1);
+}
+
+void notifyPreviewAction(QObject* context, const QString& title, const QString& error) {
+  auto message = QDBusMessage::createMethodCall(
+      QStringLiteral("org.freedesktop.Notifications"), QStringLiteral("/org/freedesktop/Notifications"),
+      QStringLiteral("org.freedesktop.Notifications"), QStringLiteral("Notify"));
+  message.setArguments({QStringLiteral("HoloNight Screenshot"), uint{0}, QStringLiteral("holonight-screenshot"), title,
+                        error.toHtmlEscaped(), QStringList{}, QVariantMap{}, -1});
+  auto* watcher = new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(message), context);
+  QObject::connect(watcher, &QDBusPendingCallWatcher::finished, context, [](QDBusPendingCallWatcher* finished) {
+    const QDBusPendingReply<uint> reply = *finished;
+    if (reply.isError()) {
+      qWarning() << "Could not deliver screenshot notification:" << reply.error().message();
+    }
+    finished->deleteLater();
+  });
 }
 
 QString applicationName(const QString& appId) {
@@ -475,14 +495,14 @@ void Workflow::newCapture() {
 
 void Workflow::copy() {
   const auto error = copyPng(result_);
-  setMessage(error.isEmpty() ? QStringLiteral("Copied to clipboard.") : error);
+  notifyPreviewAction(this, error.isEmpty() ? tr("Copied to clipboard.") : tr("Could not copy screenshot"), error);
 }
 
 void Workflow::save() {
   const auto path = choosePngPath();
   if (!path.isEmpty()) {
     const auto error = savePng(path, result_);
-    setMessage(error.isEmpty() ? QStringLiteral("Screenshot saved.") : error);
+    notifyPreviewAction(this, error.isEmpty() ? tr("Screenshot saved.") : tr("Could not save screenshot"), error);
   }
 }
 
