@@ -3,6 +3,7 @@
 #include "grim_acquisition.h"
 #include "wayland_display_p.h"
 
+#include <QCursor>
 #include <QGuiApplication>
 #include <QKeyEvent>
 #include <QPainter>
@@ -100,8 +101,17 @@ class FrozenOutput : public QQuickPaintedItem {
     if (!selection.isEmpty()) {
       painter->setPen(QPen(Qt::black, 3));
       painter->drawRect(selection);
-      painter->setPen(QPen(Qt::white, 1));
+      const bool editable = property("selectionOnly").toBool();
+      const QColor lavender(168, 154, 255);
+      painter->setPen(QPen(editable ? lavender : QColor(Qt::white), 1));
       painter->drawRect(selection);
+      if (editable) {
+        painter->setPen(QPen(QColor(24, 20, 40), 1));
+        painter->setBrush(lavender);
+        for (const auto& handle : RegionSelection::handles(selection)) {
+          painter->drawRect(QRectF(handle.center - QPointF(4, 4), QSizeF(8, 8)));
+        }
+      }
     }
   }
 
@@ -384,14 +394,21 @@ bool RegionOverlay::eventFilter(QObject* watched, QEvent* event) {
       }
       const auto* mouse = static_cast<QMouseEvent*>(event);
       const auto point = surface->output.logicalBounds.topLeft() + mouse->position();
+      const bool editable = mode_ == Mode::SelectionOnly;
+      const auto* actions = view->rootObject()->property("actionBar").value<QQuickItem*>();
+      const bool overActions =
+          actions && actions->isVisible() && actions->contains(actions->mapFromScene(mouse->position()));
+      const auto updateCursor = [&] {
+        if (editable) {
+          view->setCursor(
+              QCursor(overActions || pendingAction_ ? Qt::ArrowCursor : selection_.cursorAt(point, *frame_)));
+        }
+      };
       if ((event->type() == QEvent::MouseButtonPress || event->type() == QEvent::MouseButtonDblClick) &&
           mouse->button() == Qt::LeftButton && !dragView_) {
-        const auto* actions = view->rootObject()->property("actionBar").value<QQuickItem*>();
-        if (actions && actions->isVisible()) {
-          const auto local = actions->mapFromScene(mouse->position());
-          if (actions->contains(local)) {
-            return false;
-          }
+        updateCursor();
+        if (overActions) {
+          return false;
         }
         if (pendingAction_) {
           return true;
@@ -405,7 +422,7 @@ bool RegionOverlay::eventFilter(QObject* watched, QEvent* event) {
           return true;
         }
         // Wayland keeps delivering the drag to the surface of the button press.
-        if (selection_.begin(point, *frame_)) {
+        if (selection_.begin(point, *frame_, editable)) {
           dragView_ = view;
           redraw();
         }
@@ -416,8 +433,10 @@ bool RegionOverlay::eventFilter(QObject* watched, QEvent* event) {
                  mouse->button() == Qt::LeftButton) {
         selection_.release(point);
         dragView_.clear();
+        updateCursor();
         redraw();
       } else if (!dragView_) {
+        updateCursor();
         return false;
       }
       return true;
@@ -458,6 +477,22 @@ void RegionOverlay::setDesktop(bool desktop) {
 void RegionOverlay::redraw() {
   const bool hasCrop = !desktop_ && !selection_.cropRect(*frame_).isEmpty();
   const bool actionsAvailable = !pendingAction_ && (desktop_ || selection_.canConfirm(*frame_));
+  const auto liveCrop = mode_ == Mode::SelectionOnly ? selection_.liveCropRect(*frame_) : QRect{};
+  const Surface* badgeSurface = nullptr;
+  QRectF badgeOverlap;
+  qreal largestArea = 0;
+  if (!liveCrop.isEmpty()) {
+    for (const auto& surface : surfaces_) {
+      const auto overlap = selection_.rectangle().intersected(surface.output.logicalBounds);
+      const auto area = overlap.width() * overlap.height();
+      if (area > largestArea ||
+          (area > 0 && area == largestArea && surface.screen == QGuiApplication::primaryScreen())) {
+        largestArea = area;
+        badgeSurface = &surface;
+        badgeOverlap = overlap.translated(-surface.output.logicalBounds.topLeft());
+      }
+    }
+  }
   for (const auto& surface : surfaces_) {
     auto* item = static_cast<FrozenOutput*>(surface.preview.get());
     item->setSelection(desktop_ ? RegionSelection{} : selection_);
@@ -467,6 +502,9 @@ void RegionOverlay::redraw() {
     item->setProperty("undoAvailable", actionsAvailable && selection_.canUndo());
     item->setProperty("activeTool", static_cast<int>(selection_.tool()));
     item->setProperty("activeColor", selection_.color());
+    const bool showBadge = &surface == badgeSurface;
+    item->setProperty("badgePixels", showBadge ? liveCrop.size() : QSize{});
+    item->setProperty("visibleCrop", showBadge ? badgeOverlap : QRectF{});
   }
 }
 

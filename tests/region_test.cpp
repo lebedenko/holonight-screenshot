@@ -29,6 +29,74 @@ class RegionTest final : public QObject {
     QCOMPARE(selection.confirm(frame).size(), QSize(2, 2));
   }
 
+  void resizesCornerAndEdgeWithOppositeEdgesFixed() {
+    const auto frame = editFrame();
+    RegionSelection selection;
+    QVERIFY(selection.begin({30, 30}, frame, true));
+    selection.release({90, 90});
+
+    QCOMPARE(selection.cursorAt({24, 25}, frame), Qt::SizeFDiagCursor);
+    QVERIFY(selection.begin({24, 25}, frame, true));
+    selection.move({-6, 10});
+    QCOMPARE(selection.rectangle(), QRectF(0, 15, 90, 75));
+    QVERIFY(!selection.canConfirm(frame));
+    QVERIFY(selection.confirm(frame).isNull());
+    selection.release({-6, 10});
+
+    QCOMPARE(selection.cursorAt({90, 52.5}, frame), Qt::SizeHorCursor);
+    QVERIFY(selection.begin({90, 52.5}, frame, true));
+    selection.release({250, 65});
+    QCOMPARE(selection.rectangle(), QRectF(0, 15, 220, 75));
+    QVERIFY(selection.canConfirm(frame));
+  }
+
+  void movesAcrossOutputsAndClampsWithoutResizing() {
+    const auto frame = editFrame();
+    RegionSelection selection;
+    QVERIFY(selection.begin({20, 20}, frame, true));
+    selection.release({80, 70});
+
+    QCOMPARE(selection.cursorAt({50, 45}, frame), Qt::SizeAllCursor);
+    QVERIFY(selection.begin({50, 45}, frame, true));
+    selection.move({120, 55});
+    QCOMPARE(selection.rectangle(), QRectF(90, 30, 60, 50));
+    QVERIFY(!selection.canConfirm(frame));
+    selection.release({250, 200});
+    QCOMPARE(selection.rectangle(), QRectF(160, 70, 60, 50));
+    QVERIFY(selection.canConfirm(frame));
+  }
+
+  void replacesFromOutsideAndRejectsGapAndEmptyCrops() {
+    const auto frame = editFrame();
+    RegionSelection selection;
+    QVERIFY(selection.begin({20, 20}, frame, true));
+    selection.release({80, 70});
+    QCOMPARE(selection.cursorAt({103, 10}, frame), Qt::CrossCursor);
+    QVERIFY(selection.begin({103, 10}, frame, true));
+    QVERIFY(selection.rectangle().isEmpty());
+    selection.release({117, 70});
+    QCOMPARE(selection.rectangle(), QRectF(103, 10, 14, 60));
+    QVERIFY(selection.liveCropRect(frame).isEmpty());
+    QVERIFY(!selection.canConfirm(frame));
+
+    QVERIFY(selection.begin({130, 10}, frame, true));
+    selection.release({130, 10});
+    QVERIFY(!selection.canConfirm(frame));
+  }
+
+  void liveCropMatchesFractionalExportAfterClipping() {
+    const auto frame = createFrame();
+    RegionSelection selection;
+    QVERIFY(selection.begin({0.8, 0.6}, frame, true));
+    selection.move({8, 5});
+    QCOMPARE(selection.rectangle(), QRectF(QPointF(0.8, 0.6), QPointF(7, 3)));
+    const auto liveSize = selection.liveCropRect(frame).size();
+    QCOMPARE(liveSize, QSize(9, 4));
+    QVERIFY(!selection.canConfirm(frame));
+    selection.release({8, 5});
+    QCOMPARE(selection.confirm(frame).size(), liveSize);
+  }
+
   void cancellationDiscardsDragAndReleasedSelection() {
     const auto frame = createFrame();
     for (bool released : {false, true}) {
@@ -174,6 +242,18 @@ class RegionTest final : public QObject {
   }
 
  private:
+  static CaptureFrame editFrame() {
+    QImage image(330, 180, QImage::Format_RGB32);
+    image.fill(Qt::black);
+    return CaptureFrame(
+        image, DesktopMapping{
+                   {
+                       {QStringLiteral("left"), {0, 0, 100, 120}, OutputTransform::Normal, 1, {0, 0, 150, 180}},
+                       {QStringLiteral("right"), {120, 0, 100, 120}, OutputTransform::Normal, 1.5, {180, 0, 150, 180}},
+                   },
+                   1.5});
+  }
+
   static CaptureFrame annotationFrame() {
     QImage image(30, 21, QImage::Format_RGB32);
     image.fill(Qt::blue);

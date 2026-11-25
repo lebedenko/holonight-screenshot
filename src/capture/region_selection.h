@@ -5,6 +5,8 @@
 #include <QColor>
 #include <QPolygonF>
 
+#include <array>
+
 class QColorTransform;
 class QPainter;
 
@@ -14,7 +16,15 @@ class RegionSelection {
  public:
   enum class Tool { Select, Pen, Arrow, Rectangle };
 
-  bool begin(QPointF point, const CaptureFrame& frame);
+  struct Handle {
+    QPointF center;
+    Qt::Edges edges;
+  };
+
+  bool begin(QPointF point, const CaptureFrame& frame, bool editable = false);
+  [[nodiscard]] static std::array<Handle, 8> handles(const QRectF& rectangle);
+  [[nodiscard]] Qt::CursorShape cursorAt(QPointF point, const CaptureFrame& frame) const;
+  [[nodiscard]] QRect liveCropRect(const CaptureFrame& frame) const;
   void setTool(Tool tool) { tool_ = tool; }
   void setColor(QColor color) { color_ = color; }
   [[nodiscard]] Tool tool() const { return tool_; }
@@ -32,6 +42,15 @@ class RegionSelection {
   [[nodiscard]] QImage confirm(const CaptureFrame& frame) const;
 
  private:
+  [[nodiscard]] Qt::Edges handleAt(QPointF point) const;
+
+  struct Edit {
+    QPointF press;
+    QRectF original;
+    QRectF bounds;
+    Qt::Edges edges;
+  };
+
   struct Mark {
     Tool tool;
     QColor color;
@@ -46,6 +65,7 @@ class RegionSelection {
   std::optional<Mark> gesture_;
   QPointF rasterOrigin_;
   qreal captureScale_ = 1;
+  std::optional<Edit> edit_;
   QPointF start_;
   QPointF end_;
   bool dragging_ = false;
