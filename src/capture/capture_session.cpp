@@ -3,10 +3,17 @@
 #include "wayland-ext-foreign-toplevel-list-v1-client-protocol.h"
 #include "wayland_display_p.h"
 
+#include <QCryptographicHash>
+#include <QDir>
+#include <QFile>
 #include <QGuiApplication>
 #include <QHash>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QLockFile>
 #include <QProcess>
 #include <QRegularExpression>
+#include <QSaveFile>
 #include <QSet>
 #include <QSocketNotifier>
 #include <QStandardPaths>
@@ -16,7 +23,13 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <cstring>
 #include <map>
+#include <memory>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/un.h>
+#include <unistd.h>
 #include <utility>
 #include <wayland-client.h>
 
@@ -40,9 +53,80 @@ struct HelperCapabilities {
   bool wlrRandr = false;
 };
 
+QByteArray readFile(const QString& path) {
+  QFile file(path);
+  return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
+}
+
+bool privateDirectory(const QByteArray& path) {
+  struct stat info{};
+  return lstat(path.constData(), &info) == 0 && S_ISDIR(info.st_mode) && info.st_uid == geteuid() &&
+         (info.st_mode & 0777) == 0700;
+}
+
+QString helperCachePath(int fd) {
+  const auto runtime = qEnvironmentVariable("XDG_RUNTIME_DIR");
+  if (fd < 0 || !QDir::isAbsolutePath(runtime) || !privateDirectory(QFile::encodeName(QDir::cleanPath(runtime)))) {
+    return {};
+  }
+
+  sockaddr_un socketAddress{};
+  socklen_t addressLength = sizeof(socketAddress);
+  ucred peer{};
+  socklen_t peerLength = sizeof(peer);
+  if (getpeername(fd, reinterpret_cast<sockaddr*>(&socketAddress), &addressLength) != 0 ||
+      socketAddress.sun_family != AF_UNIX || socketAddress.sun_path[0] != '/' ||
+      getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &peer, &peerLength) != 0 || peerLength != sizeof(peer) || peer.pid <= 0) {
+    return {};
+  }
+
+  struct stat socketInfo{};
+  const QByteArray socketPath(socketAddress.sun_path, strnlen(socketAddress.sun_path, sizeof(socketAddress.sun_path)));
+  if (stat(socketPath.constData(), &socketInfo) != 0 || !S_ISSOCK(socketInfo.st_mode)) {
+    return {};
+  }
+
+  const auto boot = readFile("/proc/sys/kernel/random/boot_id").trimmed();
+  const auto process = readFile(QStringLiteral("/proc/%1/stat").arg(peer.pid));
+  const auto endOfName = process.lastIndexOf(')');
+  // After the command name, field 3 (process state) starts the remaining fields.
+  const auto fields = endOfName < 0 ? QList<QByteArray>{} : process.mid(endOfName + 2).split(' ');
+  const auto startTime = fields.value(19);
+  if (boot.isEmpty() || startTime.isEmpty()) {
+    return {};
+  }
+
+  const auto searchPath = qEnvironmentVariable("PATH");
+  QJsonArray key{1,
+                 QString::fromLatin1(boot),
+                 qEnvironmentVariable("XDG_SESSION_ID"),
+                 QFile::decodeName(socketPath),
+                 QString::number(socketInfo.st_dev),
+                 QString::number(socketInfo.st_ino),
+                 QString::number(peer.pid),
+                 QString::fromLatin1(startTime),
+                 searchPath};
+  // Relative entries are interpreted in the launcher's working directory.
+  for (const auto& entry : searchPath.split(u':')) {
+    if (QDir::isRelativePath(entry)) {
+      key.append(QDir::currentPath());
+      break;
+    }
+  }
+  const auto hash =
+      QCryptographicHash::hash(QJsonDocument(key).toJson(QJsonDocument::Compact), QCryptographicHash::Sha256).toHex();
+  const auto directory = QDir(runtime).filePath("holonight-screenshot");
+  const auto encodedDirectory = QFile::encodeName(directory);
+  if ((mkdir(encodedDirectory.constData(), 0700) != 0 && errno != EEXIST) || !privateDirectory(encodedDirectory)) {
+    return {};
+  }
+  return QDir(directory).filePath(QStringLiteral("helpers-%1.json").arg(QString::fromLatin1(hash)));
+}
+
 class HelperDiscovery final : public QObject {
  public:
-  explicit HelperDiscovery(std::function<void(HelperCapabilities)> done) : done_(std::move(done)) {}
+  HelperDiscovery(int displayFd, std::function<void(HelperCapabilities)> done)
+      : displayFd_(displayFd), done_(std::move(done)) {}
 
   ~HelperDiscovery() override {
     if (probe_.state() != QProcess::NotRunning) {
@@ -56,21 +140,36 @@ class HelperDiscovery final : public QObject {
     if (QThread::currentThread()->isInterruptionRequested()) {
       return;
     }
+    cachePath_ = helperCachePath(displayFd_);
+    if (!cachePath_.isEmpty()) {
+      lock_ = std::make_unique<QLockFile>(cachePath_ + ".lock");
+      if (!lock_->tryLock(2300)) {
+        cachePath_.clear();
+        lock_.reset();
+      } else if (loadCache()) {
+        finish();
+        return;
+      }
+    }
     const auto grim = QStandardPaths::findExecutable(QStringLiteral("grim"));
     helpers_.grim = !grim.isEmpty();
     helpers_.hyprctl = installed(QStringLiteral("hyprctl"));
     helpers_.swaymsg = installed(QStringLiteral("swaymsg"));
     helpers_.wlrRandr = installed(QStringLiteral("wlr-randr"));
     if (!helpers_.grim) {
+      saveCache();
       finish();
       return;
     }
 
     probe_.setProcessChannelMode(QProcess::MergedChannels);
-    connect(&probe_, &QProcess::finished, this, [this](int, QProcess::ExitStatus status) {
+    connect(&probe_, &QProcess::finished, this, [this](int exitCode, QProcess::ExitStatus status) {
       static const QRegularExpression option(QStringLiteral(R"((?:^|\n)\s*-T(?:\s|,|$))"));
       helpers_.grimToplevel =
           status == QProcess::NormalExit && option.match(QString::fromLocal8Bit(probe_.readAll())).hasMatch();
+      if (status == QProcess::NormalExit && !timedOut_ && exitCode == 0) {
+        saveCache();
+      }
       finish();
     });
     connect(&probe_, &QProcess::errorOccurred, this, [this](QProcess::ProcessError error) {
@@ -78,20 +177,52 @@ class HelperDiscovery final : public QObject {
         finish();
       }
     });
-    QTimer::singleShot(2000, Qt::PreciseTimer, this, [this] { probe_.kill(); });
+    QTimer::singleShot(2000, Qt::PreciseTimer, this, [this] {
+      timedOut_ = true;
+      probe_.kill();
+    });
     probe_.start(grim, {QStringLiteral("-h")}, QIODevice::ReadOnly);
   }
 
  private:
   static bool installed(const QString& helper) { return !QStandardPaths::findExecutable(helper).isEmpty(); }
 
+  bool loadCache() {
+    const auto data = QJsonDocument::fromJson(readFile(cachePath_)).array();
+    if (data.size() != 5 || !std::ranges::all_of(data, [](const auto& value) { return value.isBool(); }) ||
+        (data.at(1).toBool() && !data.at(0).toBool())) {
+      return false;
+    }
+    helpers_ = {data.at(0).toBool(), data.at(1).toBool(), data.at(2).toBool(), data.at(3).toBool(),
+                data.at(4).toBool()};
+    return true;
+  }
+
+  void saveCache() const {
+    if (cachePath_.isEmpty()) {
+      return;
+    }
+    QSaveFile file(cachePath_);
+    const auto data = QJsonDocument(QJsonArray{helpers_.grim, helpers_.grimToplevel, helpers_.hyprctl, helpers_.swaymsg,
+                                               helpers_.wlrRandr})
+                          .toJson(QJsonDocument::Compact);
+    if (file.open(QIODevice::WriteOnly) && file.write(data) == data.size()) {
+      file.commit();
+    }
+  }
+
   void finish() {
+    lock_.reset();
     if (!QThread::currentThread()->isInterruptionRequested()) {
       done_(helpers_);
     }
     QThread::currentThread()->quit();
   }
 
+  int displayFd_;
+  QString cachePath_;
+  std::unique_ptr<QLockFile> lock_;
+  bool timedOut_ = false;
   std::function<void(HelperCapabilities)> done_;
   HelperCapabilities helpers_;
   QProcess probe_{this};
@@ -358,12 +489,8 @@ struct CaptureSession::State {
     ext_foreign_toplevel_handle_v1_add_listener(handle, &listener, &window);
   }
 
-  void discover() {
-    if (started) {
-      return;
-    }
-    started = true;
-    auto* worker = new HelperDiscovery([this](HelperCapabilities result) {
+  void discoverHelpers() {
+    auto* worker = new HelperDiscovery(display ? wl_display_get_fd(display) : -1, [this](HelperCapabilities result) {
       QMetaObject::invokeMethod(
           &owner,
           [this, result] {
@@ -377,12 +504,19 @@ struct CaptureSession::State {
     QObject::connect(&helperThread, &QThread::started, worker, &HelperDiscovery::start, Qt::QueuedConnection);
     QObject::connect(&helperThread, &QThread::finished, worker, &QObject::deleteLater);
     helperThread.start();
+  }
 
+  void discover() {
+    if (started) {
+      return;
+    }
+    started = true;
     display = qtDisplay();
     if (!display) {
       ownsDisplay = true;
       display = wl_display_connect(nullptr);
       if (!display) {
+        discoverHelpers();
         connectionFailed(QStringLiteral("Could not connect to Wayland."));
         return;
       }
@@ -400,6 +534,7 @@ struct CaptureSession::State {
       QObject::connect(write, &QSocketNotifier::activated, &owner, [this] { flush(); });
     }
 
+    discoverHelpers();
     registry = wl_display_get_registry(display);
     static const wl_registry_listener listener{
         .global =

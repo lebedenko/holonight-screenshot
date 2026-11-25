@@ -9,8 +9,6 @@ ApplicationWindow {
     id: root
     required property var workflow
 
-    property int delayChoice: 0
-    property bool includeCursor: false
     readonly property var modes: workflow.modes
     readonly property var delays: [0, 3000, 5000, 10000]
     readonly property string diagnostic: workflow.page === "launcher" ? workflow.message : ""
@@ -123,6 +121,7 @@ ApplicationWindow {
 
     Shortcut {
         sequences: ["Return", "Enter"]
+        autoRepeat: false
         enabled: root.workflow.page === "picker"
         onActivated: root.workflow.confirmWindow()
     }
@@ -224,9 +223,9 @@ ApplicationWindow {
                         implicitHeight: 32
                         text: modelData
                         checkable: true
-                        checked: root.delayChoice === index
+                        checked: root.workflow.delayMs === root.delays[index]
                         ButtonGroup.group: delayButtons
-                        onClicked: root.delayChoice = index
+                        onClicked: root.workflow.delayMs = root.delays[index]
                     }
                 }
             }
@@ -241,8 +240,8 @@ ApplicationWindow {
                 id: cursor
                 objectName: "include-cursor"
                 text: qsTr("Include mouse cursor")
-                checked: root.includeCursor
-                onToggled: root.includeCursor = checked
+                checked: root.workflow.includeCursor
+                onToggled: root.workflow.includeCursor = checked
             }
 
             LauncherButton {
@@ -305,7 +304,18 @@ ApplicationWindow {
             primary: true
             glyph: "M2 6 H6 L8 3 H12 L14 6 H18 V17 H2 Z M13 11 A3 3 0 1 1 7 11 A3 3 0 1 1 13 11 Z"
             enabled: root.workflow.target !== ""
-            onClicked: root.workflow.startCapture(root.delays[root.delayChoice], root.includeCursor)
+            onEnabledChanged: if (enabled && visible)
+                forceActiveFocus(Qt.TabFocusReason)
+            onVisibleChanged: if (visible && enabled)
+                forceActiveFocus(Qt.TabFocusReason)
+            Keys.onPressed: function (event) {
+                if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                    event.accepted = true;
+                    if (!event.isAutoRepeat)
+                        click();
+                }
+            }
+            onClicked: root.workflow.startCapture()
         }
     }
 

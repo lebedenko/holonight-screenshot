@@ -6,6 +6,7 @@
 #include "region_overlay.h"
 
 #include <QCoreApplication>
+#include <QDir>
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QJsonArray>
@@ -20,6 +21,7 @@
 #include <QWindow>
 
 #include <algorithm>
+#include <array>
 #include <functional>
 #include <utility>
 
@@ -27,6 +29,25 @@ namespace screenshot {
 namespace {
 
 constexpr std::array launcherTargets{CaptureTarget::Area, CaptureTarget::Screen, CaptureTarget::Window};
+
+constexpr std::array launcherDelays{0, 3000, 5000, 10000};
+
+QString preferencesPath() {
+  const auto stateHome = qEnvironmentVariable("XDG_STATE_HOME");
+  const auto directory = QDir::isAbsolutePath(stateHome)
+                             ? QStandardPaths::writableLocation(QStandardPaths::StateLocation)
+                             : QDir::homePath() + "/.local/state/holonight-screenshot";
+  return QDir(directory).filePath("launcher.ini");
+}
+
+void savePreference(const QString& key, const QVariant& value) {
+  QSettings settings(preferencesPath(), QSettings::IniFormat);
+  settings.setValue(key, value);
+  settings.sync();
+  if (settings.status() != QSettings::NoError) {
+    qWarning() << "Could not save launcher preference" << key << "to" << settings.fileName();
+  }
+}
 
 void exitWithError(const QString& reason) {
   QTextStream(stderr) << reason << Qt::endl;
@@ -132,6 +153,7 @@ bool Workflow::loadUi() {
 
 void Workflow::start() {
   if (launcher_) {
+    loadPreferences();
     if (!loadUi()) {
       return;
     }
@@ -152,13 +174,7 @@ void Workflow::start() {
       return;
     }
     if (launcher_) {
-      for (auto mode : launcherTargets) {
-        if (session_.capabilities().supports(mode)) {
-          options_.target = mode;
-          break;
-        }
-      }
-      emit modesChanged();
+      restoreTarget();
       return;
     }
 
@@ -167,7 +183,7 @@ void Workflow::start() {
       failed(reason);
       return;
     }
-    startCapture(options_.delayMs, options_.cursor == CursorPolicy::Include);
+    startCapture();
   });
   session_.discover();
 }
@@ -184,26 +200,72 @@ QVariantList Workflow::modes() const {
 
 QString Workflow::target() const { return options_.target ? targetName(*options_.target) : QString(); }
 
+void Workflow::loadPreferences() {
+  const QSettings settings(preferencesPath(), QSettings::IniFormat);
+  savedTarget_ = settings.value("target").toString();
+  bool validDelay = false;
+  const int delay = settings.value("delayMs").toInt(&validDelay);
+  options_.delayMs = validDelay && std::ranges::find(launcherDelays, delay) != launcherDelays.end() ? delay : 0;
+  options_.cursor =
+      settings.value("includeCursor").toString() == "true" ? CursorPolicy::Include : CursorPolicy::Exclude;
+  emit preferencesChanged();
+}
+
+void Workflow::restoreTarget() {
+  options_.target.reset();
+  for (auto mode : launcherTargets) {
+    if (!session_.capabilities().supports(mode)) {
+      continue;
+    }
+    if (!options_.target || targetName(mode) == savedTarget_) {
+      options_.target = mode;
+    }
+  }
+  if (options_.target && target() != savedTarget_) {
+    savedTarget_ = target();
+    savePreference("target", savedTarget_);
+  }
+  emit modesChanged();
+}
+
+void Workflow::setDelayMs(int delay) {
+  if (!launcher_ || delay == options_.delayMs || std::ranges::find(launcherDelays, delay) == launcherDelays.end()) {
+    return;
+  }
+  options_.delayMs = delay;
+  savePreference("delayMs", delay);
+  emit preferencesChanged();
+}
+
+void Workflow::setIncludeCursor(bool include) {
+  if (!launcher_ || include == includeCursor()) {
+    return;
+  }
+  options_.cursor = include ? CursorPolicy::Include : CursorPolicy::Exclude;
+  savePreference("includeCursor", include);
+  emit preferencesChanged();
+}
+
 void Workflow::selectMode(const QString& name) {
   if (!ready_ || busy_ || page_ != "launcher") {
     return;
   }
   for (auto mode : launcherTargets) {
-    if (targetName(mode) == name && session_.capabilities().supports(mode)) {
+    if (targetName(mode) == name && options_.target != mode && session_.capabilities().supports(mode)) {
       options_.target = mode;
+      savedTarget_ = name;
+      savePreference("target", name);
       emit modesChanged();
       break;
     }
   }
 }
 
-void Workflow::startCapture(int delayMs, bool cursor) {
+void Workflow::startCapture() {
   if (!ready_ || busy_ || !options_.target || !session_.capabilities().supports(*options_.target)) {
     return;
   }
   busy_ = true;
-  options_.delayMs = delayMs;
-  options_.cursor = cursor ? CursorPolicy::Include : CursorPolicy::Exclude;
   setMessage({});
   if (*options_.target == CaptureTarget::Window) {
     if (loadUi()) {
@@ -400,7 +462,11 @@ void Workflow::closeWindow() {
 }
 
 void Workflow::newCapture() {
-  launcher_ = true;
+  if (!launcher_) {
+    launcher_ = true;
+    loadPreferences();
+    restoreTarget();
+  }
   options_.path.clear();
   result_ = {};
   setMessage({});

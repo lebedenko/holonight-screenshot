@@ -31,6 +31,8 @@ class Workflow final : public QObject {
   Q_OBJECT
   Q_PROPERTY(QString page READ page NOTIFY pageChanged)
   Q_PROPERTY(QVariantList modes READ modes NOTIFY modesChanged)
+  Q_PROPERTY(int delayMs READ delayMs WRITE setDelayMs NOTIFY preferencesChanged)
+  Q_PROPERTY(bool includeCursor READ includeCursor WRITE setIncludeCursor NOTIFY preferencesChanged)
   Q_PROPERTY(QString target READ target NOTIFY modesChanged)
   Q_PROPERTY(QVariantList windows READ windows NOTIFY windowsChanged)
   Q_PROPERTY(QString selectedWindow READ selectedWindow NOTIFY selectionChanged)
@@ -44,13 +46,17 @@ class Workflow final : public QObject {
   QString page() const { return page_; }
   QVariantList modes() const;
   QString target() const;
+  int delayMs() const { return options_.delayMs; }
+  bool includeCursor() const { return options_.cursor == CursorPolicy::Include; }
+  void setDelayMs(int delay);
+  void setIncludeCursor(bool include);
   QVariantList windows() const;
   QString selectedWindow() const { return selectedWindow_; }
   QString message() const { return message_; }
   int revision() const { return revision_; }
 
   Q_INVOKABLE void selectMode(const QString& name);
-  Q_INVOKABLE void startCapture(int delayMs, bool cursor);
+  Q_INVOKABLE void startCapture();
   Q_INVOKABLE void selectWindow(const QString& id);
   Q_INVOKABLE void moveSelection(int offset);
   Q_INVOKABLE void confirmWindow();
@@ -63,6 +69,7 @@ class Workflow final : public QObject {
  signals:
   void pageChanged();
   void modesChanged();
+  void preferencesChanged();
   void windowsChanged();
   void selectionChanged();
   void messageChanged();
@@ -70,6 +77,8 @@ class Workflow final : public QObject {
 
  private:
   bool loadUi();
+  void loadPreferences();
+  void restoreTarget();
   QList<CaptureWindow> pickableWindows() const;
   void refreshPicker();
   void captureAfterHide(const QString& id = {});
@@ -86,6 +95,7 @@ class Workflow final : public QObject {
   bool launcher_;
   bool ready_ = false;
   bool busy_ = false;
+  QString savedTarget_;
   QString page_;
   QString message_;
   QString selectedWindow_;

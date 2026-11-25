@@ -1,5 +1,6 @@
 #include <QAccessible>
 #include <QGuiApplication>
+#include <QKeyEvent>
 #include <QPalette>
 #include <QQmlComponent>
 #include <QQmlEngine>
@@ -13,6 +14,8 @@
 
 class FakeWorkflow final : public QObject {
   Q_OBJECT
+  Q_PROPERTY(int delayMs MEMBER delayMs NOTIFY preferencesChanged)
+  Q_PROPERTY(bool includeCursor MEMBER includeCursor NOTIFY preferencesChanged)
   Q_PROPERTY(QString page MEMBER page NOTIFY pageChanged)
   Q_PROPERTY(QString target MEMBER target NOTIFY modesChanged)
   Q_PROPERTY(QVariantList modes READ modes NOTIFY modesChanged)
@@ -25,6 +28,8 @@ class FakeWorkflow final : public QObject {
   QString target;
   QVariantList windows;
   QString selectedWindow;
+  int delayMs = 0;
+  bool includeCursor = false;
   int delay = -1;
   bool cursor = false;
 
@@ -55,7 +60,7 @@ class FakeWorkflow final : public QObject {
     emit modesChanged();
   }
 
-  Q_INVOKABLE void startCapture(int delayMs, bool includeCursor) {
+  Q_INVOKABLE void startCapture() {
     delay = delayMs;
     cursor = includeCursor;
     setPage({});
@@ -75,6 +80,7 @@ class FakeWorkflow final : public QObject {
 
  signals:
   void pageChanged();
+  void preferencesChanged();
   void modesChanged();
   void selectionChanged();
   void messageChanged();
@@ -181,6 +187,39 @@ class LauncherTest final : public QObject {
       auto* tooltip = button->parentItem()->findChild<QObject*>("availability-tooltip");
       QTRY_VERIFY(tooltip->property("opened").toBool());
     }
+  }
+
+  void keyboardCapture_data() {
+    QTest::addColumn<int>("key");
+    QTest::newRow("Return") << int(Qt::Key_Return);
+    QTest::newRow("keypad Enter") << int(Qt::Key_Enter);
+  }
+
+  void keyboardCapture() {
+    QFETCH(int, key);
+    FakeWorkflow workflow;
+    workflow.delayMs = 10000;
+    workflow.includeCursor = true;
+    QQmlEngine engine;
+    QQmlComponent component(&engine, QUrl(QStringLiteral("qrc:/screenshot/Launcher.qml")));
+    std::unique_ptr<QObject> launcher(
+        component.createWithInitialProperties({{"workflow", QVariant::fromValue(&workflow)}}));
+    QVERIFY2(launcher, qPrintable(component.errorString()));
+    auto* window = qobject_cast<QQuickWindow*>(launcher.get());
+    QVERIFY(window && QTest::qWaitForWindowActive(window));
+    auto* capture = findItem(window->contentItem(), "capture");
+    QVERIFY(capture && !capture->isEnabled());
+    QTest::keyClick(window, static_cast<Qt::Key>(key));
+    QCOMPARE(workflow.delay, -1);
+
+    workflow.publish({"window"}, "window");
+    QTRY_VERIFY(capture->hasActiveFocus());
+    QKeyEvent repeat(QEvent::KeyPress, key, Qt::NoModifier, {}, true);
+    QCoreApplication::sendEvent(window, &repeat);
+    QCOMPARE(workflow.delay, -1);
+    QTest::keyClick(window, static_cast<Qt::Key>(key));
+    QCOMPARE(workflow.delay, 10000);
+    QVERIFY(workflow.cursor);
   }
 
   void diagnosticPopover() {

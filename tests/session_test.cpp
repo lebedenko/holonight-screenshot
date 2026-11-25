@@ -8,6 +8,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QProcess>
+#include <QSettings>
 #include <QSignalSpy>
 #include <QSocketNotifier>
 #include <QTemporaryDir>
@@ -65,13 +66,13 @@ struct Registry {
     return true;
   }
 
-  bool startCli(QProcess& cli, const QStringList& arguments) {
+  bool startCli(QProcess& cli, const QStringList& arguments,
+                QProcessEnvironment environment = QProcessEnvironment::systemEnvironment()) {
     const int fd = connectClient();
     if (fd < 0) {
       return false;
     }
     constexpr int childFd = 198;
-    auto environment = QProcessEnvironment::systemEnvironment();
     environment.insert("WAYLAND_SOCKET", QString::number(childFd));
     cli.setProcessEnvironment(environment);
     cli.setChildProcessModifier([fd] {
@@ -224,6 +225,122 @@ class SessionTest final : public QObject {
     QJsonArray supported;
     for (const auto& name : expected) supported.append(name);
     QCOMPARE(cli.readAllStandardOutput().trimmed(), QJsonDocument(supported).toJson(QJsonDocument::Compact));
+  }
+
+  void helperCache() {
+    QTemporaryDir runtime;
+    QVERIFY(runtime.isValid());
+    const auto counter = helpers.filePath("probes");
+    const auto script =
+        QByteArray("echo probe >> '") + QFile::encodeName(counter) + "'\n/usr/bin/sleep 0.15\necho '  -T <identifier>'";
+    QVERIFY(writeHelper(QDir(helpers.path()), "grim", script));
+
+    const auto start = [&](QProcess& cli, const QString& socket, const QString& session) {
+      auto environment = QProcessEnvironment::systemEnvironment();
+      environment.insert("XDG_RUNTIME_DIR", runtime.path());
+      environment.insert("WAYLAND_DISPLAY", socket);
+      environment.insert("XDG_SESSION_ID", session);
+      cli.setProcessEnvironment(environment);
+      cli.start(QStringLiteral(SCREENSHOT_APP), {"--list-targets"});
+    };
+    const auto probes = [&] {
+      QFile file(counter);
+      return file.open(QIODevice::ReadOnly) ? file.readAll().count('\n') : 0;
+    };
+    const auto socket = runtime.filePath("wayland-test");
+    {
+      Registry registry;
+      QCOMPARE(wl_display_add_socket(registry.display, QFile::encodeName(socket).constData()), 0);
+      registry.advertiseWindows(true);
+      registry.advertise(sourceProtocol);
+      registry.advertise(imageProtocol);
+
+      QProcess first;
+      QProcess second;
+      start(first, socket, "first");
+      start(second, socket, "first");
+      QTRY_COMPARE(first.state(), QProcess::NotRunning);
+      QTRY_COMPARE(second.state(), QProcess::NotRunning);
+      QCOMPARE(first.readAllStandardOutput().trimmed(), QByteArray("[\"window\"]"));
+      QCOMPARE(second.readAllStandardOutput().trimmed(), QByteArray("[\"window\"]"));
+      QCOMPARE(probes(), 1);
+
+      // Hold a warm launcher connection open and inspect its fresh subscription on the server.
+      auto environment = first.processEnvironment();
+      environment.insert("QT_QPA_PLATFORM", "offscreen");
+      environment.insert("XDG_STATE_HOME", runtime.filePath("state"));
+      QProcess launcher;
+      launcher.setProcessEnvironment(environment);
+      launcher.start(QStringLiteral(SCREENSHOT_APP));
+      QTRY_COMPARE(registry.handles.size(), 2);
+      const auto ini = runtime.filePath("state/holonight-screenshot/launcher.ini");
+      QTRY_COMPARE(QSettings(ini, QSettings::IniFormat).value("target").toString(), QString("window"));
+      QCOMPARE(probes(), 1);
+      launcher.terminate();
+      QTRY_COMPARE(launcher.state(), QProcess::NotRunning);
+
+      start(first, socket, "second");
+      QTRY_COMPARE(first.state(), QProcess::NotRunning);
+      QCOMPARE(probes(), 2);
+    }
+    // Use a new listening socket while the server process and login session stay the same.
+    Registry replacement;
+    const auto replacementSocket = runtime.filePath("wayland-replacement");
+    QCOMPARE(wl_display_add_socket(replacement.display, QFile::encodeName(replacementSocket).constData()), 0);
+    QProcess fresh;
+    start(fresh, replacementSocket, "second");
+    QTRY_COMPARE(fresh.state(), QProcess::NotRunning);
+    QCOMPARE(probes(), 3);
+  }
+
+  void launcherTargetFallback_data() {
+    QTest::addColumn<QString>("stateHome");
+    QTest::newRow("unset") << QString();
+    QTest::newRow("empty") << QStringLiteral("");
+    QTest::newRow("relative") << QStringLiteral("relative-state");
+  }
+
+  void launcherTargetFallback() {
+    QFETCH(QString, stateHome);
+    QTemporaryDir home;
+    QVERIFY(home.isValid());
+    Registry registry;
+    registry.advertiseWindows(false);
+    registry.advertise(sourceProtocol);
+    registry.advertise(imageProtocol);
+    QVERIFY(writeHelper(QDir(helpers.path()), "grim", grimScript(true)));
+
+    const auto ini = home.filePath(".local/state/holonight-screenshot/launcher.ini");
+    {
+      QSettings settings(ini, QSettings::IniFormat);
+      settings.setValue("target", "area");
+      settings.setValue("delayMs", 10000);
+      settings.setValue("includeCursor", true);
+      settings.sync();
+      QCOMPARE(settings.status(), QSettings::NoError);
+    }
+
+    QProcess launcher;
+    auto environment = QProcessEnvironment::systemEnvironment();
+    environment.insert("HOME", home.path());
+    if (stateHome.isNull()) {
+      environment.remove("XDG_STATE_HOME");
+    } else {
+      environment.insert("XDG_STATE_HOME", stateHome);
+    }
+    QVERIFY(registry.startCli(launcher, {}, environment));
+    QTRY_COMPARE(QSettings(ini, QSettings::IniFormat).value("target").toString(), QString("window"));
+    launcher.terminate();
+    QTRY_COMPARE(launcher.state(), QProcess::NotRunning);
+
+    QProcess cli;
+    QVERIFY(registry.startCli(cli, {"--list-targets"}, environment));
+    QTRY_COMPARE(cli.state(), QProcess::NotRunning);
+    QCOMPARE(cli.readAllStandardOutput().trimmed(), QByteArray("[\"window\"]"));
+    QSettings settings(ini, QSettings::IniFormat);
+    QCOMPARE(settings.value("target").toString(), QString("window"));
+    QCOMPARE(settings.value("delayMs").toInt(), 10000);
+    QVERIFY(settings.value("includeCursor").toBool());
   }
 
   void slowProbe() {
@@ -379,10 +496,20 @@ class SessionTest final : public QObject {
     registry.advertise(screenProtocol);
     registry.advertise(layoutProtocol);
     QVERIFY(writeHelper(QDir(helpers.path()), "wlr-randr", layout));
-    QVERIFY(writeHelper(QDir(helpers.path()), "grim", grimScript(true)));
+    QVERIFY(writeHelper(QDir(helpers.path()), "grim",
+                        QByteArray("for arg do [ \"$arg\" != -c ] || exit 1; done\n") + grimScript(true)));
+    const auto state = helpers.filePath("state");
+    auto environment = QProcessEnvironment::systemEnvironment();
+    environment.insert("XDG_STATE_HOME", state);
+    QSettings settings(QDir(state).filePath("holonight-screenshot/launcher.ini"), QSettings::IniFormat);
+    settings.setValue("target", "window");
+    settings.setValue("delayMs", 10000);
+    settings.setValue("includeCursor", true);
+    settings.sync();
+    QCOMPARE(settings.status(), QSettings::NoError);
     const auto destination = helpers.filePath("capture.png");
     QProcess cli;
-    QVERIFY(registry.startCli(cli, {"--output", destination, "--delay-ms", "0"}));
+    QVERIFY(registry.startCli(cli, {"--output", destination, "--delay-ms", "0"}, environment));
     QTRY_COMPARE(cli.state(), QProcess::NotRunning);
     QCOMPARE(cli.exitCode(), 0);
     QVERIFY(!QImage(destination).isNull());
@@ -392,12 +519,16 @@ class SessionTest final : public QObject {
     const auto original = file.readAll();
     file.close();
     QVERIFY(writeHelper(QDir(helpers.path()), "grim", "echo invalid-png"));
-    QVERIFY(registry.startCli(cli, {"--target", "screen", "--output", destination}));
+    QVERIFY(registry.startCli(cli, {"--target", "screen", "--output", destination}, environment));
     QTRY_COMPARE(cli.state(), QProcess::NotRunning);
     QCOMPARE(cli.exitCode(), 1);
     QVERIFY(cli.readAllStandardError().contains("invalid PNG"));
     QVERIFY(file.open(QIODevice::ReadOnly));
     QCOMPARE(file.readAll(), original);
+    settings.sync();
+    QCOMPARE(settings.value("target").toString(), QString("window"));
+    QCOMPARE(settings.value("delayMs").toInt(), 10000);
+    QVERIFY(settings.value("includeCursor").toBool());
   }
 
  private:
