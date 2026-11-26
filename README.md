@@ -2,7 +2,7 @@
 
 A Qt Quick screenshot launcher and CLI for Hyprland, Sway, and labwc. Run `holonight-screenshot` without arguments to open the launcher. Choose **Region**, **Window**, or **Screen**, then set a delay and optionally include the mouse cursor. Region captures the desktop first and opens a frozen selection overlay. Drag a rectangle across one or more outputs. Drag a handle to resize it or drag inside to move it. Watch the pixel dimensions, then press Enter to confirm or Esc to cancel. Window opens a live picker. Use the arrow keys to select a window and Enter to confirm. Screen captures the entire desktop across all outputs.
 
-**Capture** copies the PNG to the clipboard, submits a desktop notification, and exits by default. Check **Open annotation editor** to open the capture in the editor instead. Closing the editor restores the launcher with the same settings. The launcher remembers the target, delay, cursor and editor settings. The delay presets are **None**, **3 s**, **5 s**, and **10 s**. The default is **None**, with cursor capture and the editor unchecked.
+**Capture** copies the PNG to the clipboard, submits a desktop notification, and exits by default. Check **Open annotation editor** to open the capture in the editor instead. Manually closing an editor opened from the launcher returns to the launcher with the same settings. The launcher remembers the target, delay, cursor and editor settings. The delay presets are **None**, **3 s**, **5 s**, and **10 s**. The default is **None**, with cursor capture and the editor unchecked.
 
 Build on the host with CMake 3.25+, Ninja, Task, pkg-config, C and C++23 compilers, libwayland-client, `wayland-scanner`, the `wayland-protocols` XML files, LayerShellQt 6.6+, toml++, and Qt 6.11+ (Core, D-Bus, Gui, Widgets, Quick, Quick Controls, Wayland Client, and Test for the development preset). On Arch Linux, `qt6-base` provides Qt Wayland Client. Screenshot has no HoloNight package dependencies. Region selection also requires the compositor's `zwlr_layer_shell_v1` protocol.
 
@@ -29,7 +29,18 @@ The app reads `$XDG_CONFIG_HOME/holonight-screenshot/config.toml` at startup. An
 | `[editor]` | `text_font_weight` | `400` (normal). Accepts Qt font weights 1–1000. The Bold control toggles between `700` and `400`. |
 | `[editor]` | `text_font_size` | `24` image pixels (1–256). |
 
-Each capture starts at **Fit** with **Select** active. Annotation styles start with the configured defaults, and sidebar changes apply to the current capture. The editor starts at 1600 × 900 logical pixels, fits the available screen space down to a minimum of 760 × 520, and leaves placement to the compositor. It restores its normal size and maximized state from `editor.ini`. Both `editor.ini` and `launcher.ini` live under `$XDG_STATE_HOME/holonight-screenshot/` or `~/.local/state/holonight-screenshot/` when the variable is unset, empty or relative.
+For example, this configuration keeps the editor open after an export and starts each capture with a wider stroke. Omitted keys use their defaults.
+
+```toml
+[general]
+close_after_copy = false
+close_after_save = false
+
+[editor]
+stroke_width = 5
+```
+
+Each capture starts at **Fit** with **Select** active. Annotation styles start with the configured defaults, and sidebar changes apply to the current capture. The editor restores its normal size and maximized state from `editor.ini`. Without a valid saved size, it requests 1600 × 900 logical pixels. The app fits the requested size to the available screen space where the 760 × 520 minimum allows. The compositor places the window. Both `editor.ini` and `launcher.ini` live under `$XDG_STATE_HOME/holonight-screenshot/` or `~/.local/state/holonight-screenshot/` when the variable is unset, empty or relative.
 
 ## Code quality
 
@@ -65,7 +76,7 @@ requires local Unix socket access.
 | `holonight-screenshot --target active-window --output PATH` | Save the window focused when the delay expires. Active Window is CLI-only and supports clipboard output, direct save, and the editor. |
 | `holonight-screenshot --list-targets` | Print the session’s supported target names as a JSON array. |
 
-Use `--delay-ms N` for a delay in milliseconds (0–2147483647) and `--include-cursor` to request the pointer. The delay starts after any launcher or window picker hides. Screen and Active Window clipboard and direct-save captures use no GUI. PNG output replaces the destination atomically. CLI exit statuses are 0 for success, 1 for error, and 2 for cancellation. Help and version work outside a Wayland session.
+Use `--delay-ms N` for a delay in milliseconds (0–2147483647) and `--include-cursor` to request the pointer. The delay starts after any launcher or window picker hides. Screen and Active Window clipboard and direct-save captures use no GUI. PNG output replaces the destination atomically. Direct CLI captures exit with status 0 on success, 1 on error, or 2 when the region selector or window picker is canceled. Help and version work outside a Wayland session.
 
 Screen and Region require `grim` and a layout helper. Hyprland uses `hyprctl`, while Sway and labwc use `wlr-randr` with JSON support. Window requires `grim -T` and the compositor’s foreign toplevel list and image-copy protocols. Active Window also requires `hyprctl` on Hyprland or `swaymsg` on Sway. labwc offers Window when the protocols are available.
 
