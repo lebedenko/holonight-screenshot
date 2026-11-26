@@ -68,6 +68,7 @@ class Workflow final : public QObject {
   Q_INVOKABLE void confirmWindow();
   Q_INVOKABLE void cancelPicker();
   Q_INVOKABLE void closeWindow();
+  Q_INVOKABLE void showEditorWindow(QWindow* window);
   Q_INVOKABLE void copy();
   Q_INVOKABLE void save();
 
@@ -96,6 +97,7 @@ class Workflow final : public QObject {
   void setMessage(const QString& message);
 
   Options options_;
+  const Config config_;
   bool launcher_;
   bool ready_ = false;
   bool busy_ = false;

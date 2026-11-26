@@ -10,7 +10,6 @@
 #include <QDBusMessage>
 #include <QDBusPendingCallWatcher>
 #include <QDBusPendingReply>
-#include <QDir>
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QJsonArray>
@@ -19,6 +18,7 @@
 #include <QQmlApplicationEngine>
 #include <QQuickImageProvider>
 #include <QScopedValueRollback>
+#include <QScreen>
 #include <QSettings>
 #include <QStandardPaths>
 #include <QTextStream>
@@ -35,16 +35,8 @@ namespace {
 
 constexpr std::array launcherTargets{CaptureTarget::Area, CaptureTarget::Screen, CaptureTarget::Window};
 
-QString preferencesPath() {
-  const auto stateHome = qEnvironmentVariable("XDG_STATE_HOME");
-  const auto directory = QDir::isAbsolutePath(stateHome)
-                             ? QStandardPaths::writableLocation(QStandardPaths::StateLocation)
-                             : QDir::homePath() + "/.local/state/holonight-screenshot";
-  return QDir(directory).filePath("launcher.ini");
-}
-
 void savePreference(const QString& key, const QVariant& value) {
-  QSettings settings(preferencesPath(), QSettings::IniFormat);
+  QSettings settings(statePath("launcher.ini"), QSettings::IniFormat);
   settings.setValue(key, value);
   settings.sync();
   if (settings.status() != QSettings::NoError) {
@@ -149,7 +141,8 @@ bool presetDelay(int delay) { return delay == 0 || delay == 3000 || delay == 500
 
 }  // namespace
 
-Workflow::Workflow(Options options) : options_(std::move(options)), launcher_(!options_.target && !options_.list) {}
+Workflow::Workflow(Options options)
+    : options_(std::move(options)), config_(loadConfig()), launcher_(!options_.target && !options_.list) {}
 
 Workflow::~Workflow() = default;
 
@@ -220,7 +213,7 @@ QVariantList Workflow::modes() const {
 QString Workflow::target() const { return options_.target ? targetName(*options_.target) : QString(); }
 
 void Workflow::loadPreferences() {
-  const QSettings settings(preferencesPath(), QSettings::IniFormat);
+  const QSettings settings(statePath("launcher.ini"), QSettings::IniFormat);
   savedTarget_ = settings.value("target").toString();
   bool validDelay = false;
   const int delay = settings.value("delayMs").toInt(&validDelay);
@@ -417,7 +410,7 @@ void Workflow::captured(const CaptureFrame& frame) {
 void Workflow::handleResult(const QImage& image) {
   if (options_.editor) {
     releaseCapture();
-    document_.reset(image);
+    document_.reset(image, config_.annotations);
     if (loadUi()) {
       setPage(QStringLiteral("editor"));
     }
@@ -431,11 +424,13 @@ void Workflow::handleResult(const QImage& image) {
   }
   releaseCapture();
   if (launcher_) {
-    setPage(QStringLiteral("launcher"));
     notifyOutput(this, tr("Copied to clipboard."), {});
-  } else {
-    QCoreApplication::exit(0);
+    if (!config_.closeAfterCopy) {
+      setPage(QStringLiteral("launcher"));
+      return;
+    }
   }
+  QCoreApplication::exit(0);
 }
 
 void Workflow::releaseCapture() {
@@ -463,6 +458,10 @@ void Workflow::canceled() {
     return;
   }
   releaseCapture();
+  if (page_ != "picker" && config_.closeOnRegionCancel) {
+    QCoreApplication::exit(0);
+    return;
+  }
   setPage(QStringLiteral("launcher"));
 }
 
@@ -479,12 +478,52 @@ void Workflow::closeWindow() {
   }
 }
 
+void Workflow::showEditorWindow(QWindow* window) {
+  QSettings settings(statePath("editor.ini"), QSettings::IniFormat);
+  QSize size(settings.value("width").toInt(), settings.value("height").toInt());
+  if (size.width() < window->minimumWidth() || size.height() < window->minimumHeight()) {
+    size = QSize(1600, 900);
+  }
+  if (const auto* screen = window->screen()) {
+    size = size.boundedTo(screen->availableGeometry().size());
+  }
+  window->resize(size.expandedTo(window->minimumSize()));
+  if (settings.value("maximized", false).toBool()) {
+    window->setWindowState(Qt::WindowMaximized);
+  }
+  window->setVisible(true);
+
+  // Coalesce width and height changes and check the state after compositor-driven resizes.
+  auto* geometrySave = new QTimer(window);
+  geometrySave->setSingleShot(true);
+  connect(window, &QWindow::widthChanged, geometrySave, qOverload<>(&QTimer::start));
+  connect(window, &QWindow::heightChanged, geometrySave, qOverload<>(&QTimer::start));
+  connect(window, &QWindow::windowStateChanged, geometrySave, qOverload<>(&QTimer::start));
+  connect(geometrySave, &QTimer::timeout, window, [window] {
+    QSettings state(statePath("editor.ini"), QSettings::IniFormat);
+    if (window->windowState() == Qt::WindowNoState) {
+      state.setValue("width", window->width());
+      state.setValue("height", window->height());
+      state.setValue("maximized", false);
+    } else if (window->windowState() == Qt::WindowMaximized) {
+      state.setValue("maximized", true);
+    }
+    state.sync();
+    if (state.status() != QSettings::NoError) {
+      qWarning() << "Could not save editor geometry to" << state.fileName();
+    }
+  });
+}
+
 void Workflow::copy() {
   if (page_ != "editor" || document_.busy() || choosingPath_) {
     return;
   }
   const auto error = copyPng(document_.render());
   notifyOutput(this, error.isEmpty() ? tr("Copied to clipboard.") : tr("Could not copy screenshot"), error);
+  if (error.isEmpty() && config_.closeAfterCopy) {
+    QCoreApplication::exit(0);
+  }
 }
 
 void Workflow::save() {
@@ -492,10 +531,13 @@ void Workflow::save() {
     return;
   }
   const QScopedValueRollback choosing(choosingPath_, true);
-  const auto path = options_.path.isEmpty() ? choosePngPath() : options_.path;
+  const auto path = options_.path.isEmpty() ? choosePngPath(saveDialogDirectory(config_.saveDirectory)) : options_.path;
   if (!path.isEmpty()) {
     const auto error = savePng(path, document_.render());
     notifyOutput(this, error.isEmpty() ? tr("Screenshot saved.") : tr("Could not save screenshot"), error);
+    if (error.isEmpty() && config_.closeAfterSave) {
+      QCoreApplication::exit(0);
+    }
   }
 }
 

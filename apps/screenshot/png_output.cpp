@@ -5,10 +5,8 @@
 #include <QBuffer>
 #include <QDateTime>
 #include <QDeadlineTimer>
-#include <QDir>
 #include <QFileDialog>
 #include <QProcess>
-#include <QStandardPaths>
 
 namespace screenshot {
 
@@ -44,11 +42,7 @@ QString copyPng(const QImage& image) {
   return {};
 }
 
-QString choosePngPath() {
-  auto directory = QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);
-  if (!QDir(directory).exists() || directory.isEmpty()) {
-    directory = QDir::homePath();
-  }
+QString choosePngPath(const QString& directory) {
   QFileDialog dialog;
   dialog.setWindowTitle(QStringLiteral("Save Screenshot"));
   dialog.setDirectory(directory);

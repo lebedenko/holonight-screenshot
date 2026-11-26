@@ -379,9 +379,7 @@ FocusScope {
                                     selectByMouse: true
                                     color: editor.document.properties.color
                                     // This font is drawn in source pixels, then scaled with the canvas.
-                                    font: Qt.font({pixelSize: editor.document.properties.size ?? 24,
-                                        bold: editor.document.properties.bold ?? false,
-                                        italic: editor.document.properties.italic ?? false})
+                                    font: editor.document.annotationFont
                                     Accessible.name: qsTr("Annotation text")
                                     onCursorRectangleChanged: {
                                         const bottom = cursorRectangle.y + cursorRectangle.height;
@@ -482,8 +480,8 @@ FocusScope {
                     CheckBox {
                         text: qsTr("Bold")
                         visible: properties.tool === 5
-                        checked: editor.document.properties.bold
-                        onToggled: editor.document.setPropertyValue("bold", checked)
+                        checked: (editor.document.properties.weight ?? Font.Normal) >= Font.Bold
+                        onToggled: editor.document.setPropertyValue("weight", checked ? Font.Bold : Font.Normal)
                     }
                     CheckBox {
                         text: qsTr("Italic")

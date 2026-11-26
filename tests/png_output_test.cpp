@@ -67,7 +67,7 @@ class PngOutputTest final : public QObject {
         dialog->close();
       }
     });
-    QCOMPARE(choosePngPath(), QString());
+    QCOMPARE(choosePngPath(directory_.path()), QString());
 
     QVERIFY(existing.open(QIODevice::ReadOnly));
     QCOMPARE(existing.readAll(), QByteArray("existing data"));

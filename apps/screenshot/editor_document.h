@@ -1,5 +1,8 @@
 #pragma once
 
+#include "config.h"
+
+#include <QFont>
 #include <QImage>
 #include <QObject>
 #include <QPolygonF>
@@ -19,6 +22,7 @@ class EditorDocument final : public QObject {
   Q_PROPERTY(QRect view READ view NOTIFY changed)
   Q_PROPERTY(QRectF pendingCrop READ pendingCrop NOTIFY changed)
   Q_PROPERTY(QRectF textBox READ textBox NOTIFY changed)
+  Q_PROPERTY(QFont annotationFont READ annotationFont NOTIFY changed)
   Q_PROPERTY(QString draftText READ draftText NOTIFY changed)
   Q_PROPERTY(bool editingText READ editingText NOTIFY changed)
   Q_PROPERTY(QRectF selection READ selection NOTIFY changed)
@@ -31,7 +35,7 @@ class EditorDocument final : public QObject {
   enum Tool { Select, Pen, Rectangle, Ellipse, Arrow, Text, Number, Blur, ToolCount };
   Q_ENUM(Tool)
 
-  void reset(QImage image);
+  void reset(QImage image, const AnnotationDefaults& annotations = {});
   QImage render(bool canvas = false) const;
   int revision() const { return revision_; }
   int tool() const { return tool_; }
@@ -42,6 +46,7 @@ class EditorDocument final : public QObject {
   QRectF pendingCrop() const { return pendingCrop_.value_or(QRectF()); }
   QRectF selection() const;
   QRectF textBox() const;
+  QFont annotationFont() const;
   QString draftText() const;
   bool editingText() const { return textDraft_.has_value(); }
   bool cropping() const { return pendingCrop_.has_value(); }

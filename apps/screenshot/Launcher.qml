@@ -430,9 +430,8 @@ ApplicationWindow {
         sourceComponent: ApplicationWindow {
             title: qsTr("HoloNight Screenshot")
             transientParent: null
-            visible: true
-            width: 1120
-            height: 720
+            id: editorWindow
+            Component.onCompleted: root.workflow.showEditorWindow(editorWindow)
             minimumWidth: 760
             minimumHeight: 520
             onClosing: function (close) {

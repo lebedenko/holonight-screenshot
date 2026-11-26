@@ -2,9 +2,9 @@
 
 A Qt Quick screenshot launcher and CLI for Hyprland, Sway, and labwc. Run `holonight-screenshot` without arguments to open the launcher. Choose **Region**, **Window**, or **Screen**, then set a delay and optionally include the mouse cursor. Region captures the desktop first and opens a frozen selection overlay. Drag a rectangle across one or more outputs. Drag a handle to resize it or drag inside to move it. Watch the pixel dimensions, then press Enter to confirm or Esc to cancel. Window opens a live picker. Use the arrow keys to select a window and Enter to confirm. Screen captures the entire desktop across all outputs.
 
-**Capture** copies the PNG to the clipboard, shows a desktop notification, and returns to the launcher. Check **Open annotation editor** to open the capture in the editor instead. Closing the editor restores the launcher with the same settings. The launcher remembers the target, delay, cursor and editor settings. The delay presets are **None**, **3 s**, **5 s**, and **10 s**. The default is **None**, with cursor capture and the editor unchecked.
+**Capture** copies the PNG to the clipboard, submits a desktop notification, and exits by default. Check **Open annotation editor** to open the capture in the editor instead. Closing the editor restores the launcher with the same settings. The launcher remembers the target, delay, cursor and editor settings. The delay presets are **None**, **3 s**, **5 s**, and **10 s**. The default is **None**, with cursor capture and the editor unchecked.
 
-Build on the host with CMake 3.25+, Ninja, Task, pkg-config, C and C++23 compilers, libwayland-client, `wayland-scanner`, the `wayland-protocols` XML files, LayerShellQt 6.6+, and Qt 6.11+ (Core, D-Bus, Gui, Widgets, Quick, Quick Controls, Wayland Client, and Test for the development preset). On Arch Linux, `qt6-base` provides Qt Wayland Client. Screenshot has no HoloNight package dependencies. Region selection also requires the compositor's `zwlr_layer_shell_v1` protocol.
+Build on the host with CMake 3.25+, Ninja, Task, pkg-config, C and C++23 compilers, libwayland-client, `wayland-scanner`, the `wayland-protocols` XML files, LayerShellQt 6.6+, toml++, and Qt 6.11+ (Core, D-Bus, Gui, Widgets, Quick, Quick Controls, Wayland Client, and Test for the development preset). On Arch Linux, `qt6-base` provides Qt Wayland Client. Screenshot has no HoloNight package dependencies. Region selection also requires the compositor's `zwlr_layer_shell_v1` protocol.
 
 ```sh
 task build
@@ -13,6 +13,23 @@ task run
 task run -- --help
 task run PRESET=release -- --version
 ```
+
+## Configuration and state
+
+The app reads `$XDG_CONFIG_HOME/holonight-screenshot/config.toml` at startup. An unset, empty or relative `XDG_CONFIG_HOME` uses `~/.config`. A missing file uses the defaults below. Invalid values produce a warning and use their defaults. A malformed TOML file produces a warning and uses all defaults.
+
+| Section | Key | Default and behavior |
+| --- | --- | --- |
+| `[general]` | `save_directory` | `~/Pictures`. The starting folder for the Save dialog. Accepts absolute paths and expands a leading `~/`. An unavailable folder falls back to `~/Pictures`, then the home directory. An explicit `--output` takes precedence. |
+| `[general]` | `close_on_region_cancel` | `true`. Canceling a launcher region capture exits the app. Set to `false` to return to the launcher. |
+| `[general]` | `close_after_copy` | `true`. Successful editor Copy and launcher quick capture exit. Set to `false` to keep the editor open or return to the launcher. |
+| `[general]` | `close_after_save` | `true`. Successful editor Save exits. Set to `false` to keep the editor open. |
+| `[editor]` | `stroke_width` | `3` image pixels (1–256). Applies to Pen, Rectangle, Ellipse, and Arrow. |
+| `[editor]` | `text_font_family` | The application's default font family. |
+| `[editor]` | `text_font_weight` | `400` (normal). Accepts Qt font weights 1–1000. The Bold control toggles between `700` and `400`. |
+| `[editor]` | `text_font_size` | `24` image pixels (1–256). |
+
+Each capture starts at **Fit** with **Select** active. Annotation styles start with the configured defaults, and sidebar changes apply to the current capture. The editor starts at 1600 × 900 logical pixels, fits the available screen space down to a minimum of 760 × 520, and leaves placement to the compositor. It restores its normal size and maximized state from `editor.ini`. Both `editor.ini` and `launcher.ini` live under `$XDG_STATE_HOME/holonight-screenshot/` or `~/.local/state/holonight-screenshot/` when the variable is unset, empty or relative.
 
 ## Code quality
 
@@ -60,7 +77,7 @@ With **Text**, click for a two-line box or drag to set its size. Type on the can
 
 In **Crop** mode, draw, move, or resize the crop and press Enter or **Apply** to commit. Press Esc or **Cancel** to discard the pending crop. **Show guides** toggles a thirds grid.
 
-**Copy** (Ctrl+C) and **Save** (Ctrl+S) export the same full-resolution image with committed marks, crop, and capture color profile. The actions keep the editor open and show desktop notifications. Copy uses `wl-copy` from the `wl-clipboard` package. **Save…** opens a PNG dialog when the CLI has supplied no destination. Canceling the dialog or capture preserves any existing destination.
+**Copy** (Ctrl+C) and **Save** (Ctrl+S) export the same full-resolution image with committed marks, crop, and capture color profile. Successful exports submit a desktop notification and close the app by default. A failed export reports the error and leaves the capture and annotations open. Copy uses `wl-copy` from the `wl-clipboard` package. **Save…** opens a PNG dialog when the CLI has supplied no destination. Canceling the Save dialog leaves the editor open with its edits intact. Canceling the dialog or capture preserves any existing destination.
 
 The default asks grim to exclude the pointer. On the tested Hyprland 0.57.2 session, the pointer appeared in both the tooltip capture and the equivalent direct grim capture without `-c`.
 

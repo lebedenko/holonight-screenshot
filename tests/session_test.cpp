@@ -8,12 +8,14 @@
 #include <QColorSpace>
 #include <QDir>
 #include <QFile>
+#include <QFileDialog>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QProcess>
 #include <QQuickItem>
 #include <QQuickWindow>
 #include <QScopeGuard>
+#include <QScreen>
 #include <QSettings>
 #include <QSignalSpy>
 #include <QSocketNotifier>
@@ -163,11 +165,19 @@ class SessionTest final : public QObject {
   void init() {
     QVERIFY(helpers.isValid());
     qputenv("PATH", helpers.path().toUtf8());
+    qputenv("XDG_CONFIG_HOME", helpers.filePath("config").toUtf8());
+    qputenv("XDG_STATE_HOME", helpers.filePath("state").toUtf8());
     qputenv("XDG_CURRENT_DESKTOP", "labwc");
     qunsetenv("WAYLAND_SOCKET");
     qunsetenv("HYPRLAND_INSTANCE_SIGNATURE");
     qunsetenv("SWAYSOCK");
     QDir helperDir(helpers.path());
+    for (const auto& name : {"config", "state"}) {
+      QDir directory(helpers.filePath(name));
+      if (directory.exists()) {
+        QVERIFY(directory.removeRecursively());
+      }
+    }
     for (const auto& path : helperDir.entryList(QDir::Files)) {
       QVERIFY(helperDir.remove(path));
     }
@@ -574,6 +584,212 @@ class SessionTest final : public QObject {
     }
   }
 
+  void configPathsAndValidation() {
+    QCOMPARE(configPath(), helpers.filePath("config/holonight-screenshot/config.toml"));
+    QCOMPARE(statePath("editor.ini"), helpers.filePath("state/holonight-screenshot/editor.ini"));
+    for (const auto& value : {QByteArray(), QByteArray(""), QByteArray("relative")}) {
+      if (value.isNull()) {
+        qunsetenv("XDG_CONFIG_HOME");
+        qunsetenv("XDG_STATE_HOME");
+      } else {
+        qputenv("XDG_CONFIG_HOME", value);
+        qputenv("XDG_STATE_HOME", value);
+      }
+      QCOMPARE(configPath(), QDir::home().filePath(".config/holonight-screenshot/config.toml"));
+      QCOMPARE(statePath("editor.ini"), QDir::home().filePath(".local/state/holonight-screenshot/editor.ini"));
+    }
+    qputenv("XDG_CONFIG_HOME", helpers.filePath("config").toUtf8());
+    const auto defaults = loadConfig();
+    QVERIFY(defaults.closeOnRegionCancel && defaults.closeAfterCopy && defaults.closeAfterSave);
+    QCOMPARE(defaults.annotations.strokeWidth, 3);
+    QCOMPARE(defaults.annotations.textFontSize, 24);
+    QCOMPARE(defaults.annotations.textFontWeight, 400);
+    QVERIFY(defaults.annotations.textFontFamily.isEmpty());
+    QCOMPARE(saveDialogDirectory(helpers.path()), helpers.path());
+    QCOMPARE(saveDialogDirectory(helpers.filePath("missing")), saveDialogDirectory({}));
+
+    QVERIFY(writeConfig(R"(
+[general]
+save_directory = "~/Shots"
+close_on_region_cancel = false
+close_after_copy = "false"
+close_after_save = false
+[editor]
+stroke_width = 256
+text_font_size = 1.0
+text_font_weight = 1001
+text_font_family = " "
+)"));
+    QTest::ignoreMessage(QtWarningMsg, QRegularExpression("Invalid screenshot setting: .*close_after_copy"));
+    QTest::ignoreMessage(QtWarningMsg, QRegularExpression("Invalid screenshot setting: .*text_font_size"));
+    QTest::ignoreMessage(QtWarningMsg, QRegularExpression("Invalid screenshot setting: .*text_font_weight"));
+    QTest::ignoreMessage(QtWarningMsg, QRegularExpression("Invalid screenshot setting: .*text_font_family"));
+    const auto config = loadConfig();
+    QCOMPARE(config.saveDirectory, QDir::home().filePath("Shots"));
+    QVERIFY(!config.closeOnRegionCancel && config.closeAfterCopy && !config.closeAfterSave);
+    QCOMPARE(config.annotations.strokeWidth, 256);
+    QCOMPARE(config.annotations.textFontSize, defaults.annotations.textFontSize);
+    QCOMPARE(config.annotations.textFontWeight, defaults.annotations.textFontWeight);
+    QCOMPARE(config.annotations.textFontFamily, defaults.annotations.textFontFamily);
+
+    QVERIFY(writeConfig("[general]\nclose_after_copy = false\n[editor"));
+    QTest::ignoreMessage(QtWarningMsg, QRegularExpression("Could not parse screenshot config"));
+    QVERIFY(loadConfig().closeAfterCopy);
+  }
+
+  void editorRestoresGeometry() {
+    QWindow window;
+    window.setMinimumSize({760, 520});
+    Workflow workflow({});
+    workflow.showEditorWindow(&window);
+    const auto available = window.screen()->availableGeometry().size();
+    QCOMPARE(window.size(), QSize(1600, 900).boundedTo(available).expandedTo(window.minimumSize()));
+
+    const QSize normal(770, 530);
+    window.resize(normal);
+    QSettings settings(statePath("editor.ini"), QSettings::IniFormat);
+    QTRY_COMPARE(settings.value("width").toInt(), normal.width());
+    QCOMPARE(settings.value("height").toInt(), normal.height());
+    window.setWindowState(Qt::WindowMaximized);
+    QTRY_VERIFY(settings.value("maximized").toBool());
+    QCOMPARE(settings.value("width").toInt(), normal.width());
+    window.hide();
+
+    {
+      QWindow restored;
+      restored.setMinimumSize(window.minimumSize());
+      workflow.showEditorWindow(&restored);
+      QCOMPARE(restored.windowState(), Qt::WindowMaximized);
+    }
+    settings.setValue("maximized", false);
+    QWindow restored;
+    restored.setMinimumSize(window.minimumSize());
+    workflow.showEditorWindow(&restored);
+    QCOMPARE(restored.size(), normal.boundedTo(available).expandedTo(restored.minimumSize()));
+  }
+
+  void editorStylesResetBetweenCaptures() {
+    Registry registry;
+    registry.advertiseWindows(true);
+    registry.advertise(sourceProtocol);
+    registry.advertise(imageProtocol);
+    QVERIFY(writeHelper(QDir(helpers.path()), "grim", grimScript(true)));
+    QVERIFY(writeConfig(R"(
+[editor]
+stroke_width = 12
+text_font_family = "DejaVu Sans"
+text_font_weight = 650
+text_font_size = 36
+)"));
+    QVERIFY(registry.connectInProcess());
+    Workflow workflow({});
+    workflow.start();
+    QTRY_COMPARE(workflow.target(), QString("window"));
+    workflow.setOpenEditor(true);
+    auto* document = qobject_cast<EditorDocument*>(workflow.document());
+    for (int capture = 0; capture < 2; ++capture) {
+      workflow.startCapture();
+      QTRY_COMPARE(workflow.page(), QString("picker"));
+      workflow.selectWindow("second");
+      workflow.confirmWindow();
+      QTRY_COMPARE(workflow.page(), QString("editor"));
+      QCOMPARE(document->tool(), EditorDocument::Select);
+      auto* window = QGuiApplication::focusWindow();
+      QVERIFY(window);
+      auto* zoom = window->findChild<QQuickItem*>("editor-zoom");
+      QVERIFY(zoom);
+      QCOMPARE(zoom->property("currentIndex").toInt(), 0);
+      QVERIFY(QMetaObject::invokeMethod(zoom, "activated", Q_ARG(int, 5)));
+      for (const auto tool :
+           {EditorDocument::Pen, EditorDocument::Rectangle, EditorDocument::Ellipse, EditorDocument::Arrow}) {
+        document->setTool(tool);
+        QCOMPARE(document->properties().value("width").toInt(), 12);
+        document->setPropertyValue("width", 40);
+      }
+      document->setTool(EditorDocument::Text);
+      QCOMPARE(document->properties().value("family").toString(), QString("DejaVu Sans"));
+      QCOMPARE(document->properties().value("weight").toInt(), 650);
+      QCOMPARE(document->properties().value("size").toInt(), 36);
+      document->setPropertyValue("weight", 700);
+      document->setPropertyValue("size", 20);
+      workflow.closeWindow();
+      QCOMPARE(workflow.page(), QString("launcher"));
+    }
+  }
+
+  void editorOutputLifecycle_data() {
+    QTest::addColumn<bool>("save");
+    QTest::addColumn<bool>("close");
+    QTest::addColumn<QString>("outcome");
+    QTest::newRow("copy closes") << false << true << QString("ok");
+    QTest::newRow("copy stays") << false << false << QString("ok");
+    QTest::newRow("copy fails") << false << true << QString("error");
+    QTest::newRow("save closes") << true << true << QString("ok");
+    QTest::newRow("save stays") << true << false << QString("ok");
+    QTest::newRow("save fails") << true << true << QString("error");
+    QTest::newRow("save dialog canceled") << true << true << QString("cancel");
+  }
+
+  void editorOutputLifecycle() {
+    QFETCH(bool, save);
+    QFETCH(bool, close);
+    QFETCH(QString, outcome);
+    Registry registry;
+    registry.advertise(screenProtocol);
+    registry.advertise(layoutProtocol);
+    QVERIFY(writeHelper(QDir(helpers.path()), "wlr-randr", layout));
+    QVERIFY(writeHelper(QDir(helpers.path()), "grim", grimScript(true)));
+    QVERIFY(writeHelper(QDir(helpers.path()), "wl-copy", outcome == "error" ? "exit 1" : "/usr/bin/cat >/dev/null"));
+    const auto config = QString("[general]\nsave_directory = '%1'\nclose_after_copy = %2\nclose_after_save = %2")
+                            .arg(helpers.path(), close ? "true" : "false");
+    QVERIFY(writeConfig(config.toUtf8()));
+    const auto destination = outcome == "cancel"          ? QString()
+                             : save && outcome == "error" ? helpers.path()
+                                                          : helpers.filePath("explicit.png");
+    QVERIFY(registry.connectInProcess());
+    Workflow workflow({.path = destination, .target = CaptureTarget::Screen, .editor = true});
+    workflow.start();
+    QTRY_COMPARE(workflow.page(), QString("editor"));
+    auto* document = qobject_cast<EditorDocument*>(workflow.document());
+    document->setTool(EditorDocument::Pen);
+    document->begin({0, 0}, 1);
+    document->finish({0, 0});
+    const auto rendered = document->render();
+    const bool shouldClose = close && outcome == "ok";
+    bool dialogDirectoryMatches = false;
+    const auto exitWithoutClosing = [] { QCoreApplication::exit(42); };
+    QTimer watchdog;
+    watchdog.setSingleShot(true);
+    connect(&watchdog, &QTimer::timeout, this, exitWithoutClosing);
+    watchdog.start(2000);
+    QTimer::singleShot(0, &workflow, [&] {
+      if (outcome == "cancel") {
+        QTimer::singleShot(0, &workflow, [&] {
+          if (auto* dialog = qobject_cast<QFileDialog*>(QApplication::activeModalWidget())) {
+            dialogDirectoryMatches = dialog->directory().absolutePath() == helpers.path();
+            dialog->reject();
+          }
+        });
+      }
+      save ? workflow.save() : workflow.copy();
+      QTimer::singleShot(0, &workflow, exitWithoutClosing);
+    });
+    QCOMPARE(QCoreApplication::exec(), shouldClose ? 0 : 42);
+    if (!shouldClose) {
+      QCOMPARE(workflow.page(), QString("editor"));
+      QCOMPARE(document->render(), rendered);
+      QVERIFY(document->canUndo());
+    }
+    if (save && outcome == "ok") {
+      const QImage saved(destination);
+      QCOMPARE(saved.size(), rendered.size());
+      QCOMPARE(saved.pixelColor(0, 0), rendered.pixelColor(0, 0));
+    }
+    if (outcome == "cancel") {
+      QVERIFY(dialogDirectoryMatches);
+    }
+  }
+
   void editorSavesOnlyOnRequest() {
     QTest::failOnWarning(QRegularExpression("Both point size and pixel size set"));
     Registry registry;
@@ -581,6 +797,7 @@ class SessionTest final : public QObject {
     registry.advertise(layoutProtocol);
     QVERIFY(writeHelper(QDir(helpers.path()), "wlr-randr", layout));
     QVERIFY(writeHelper(QDir(helpers.path()), "grim", grimScript(true)));
+    QVERIFY(writeConfig("[general]\nclose_after_copy = false\nclose_after_save = false"));
     const auto destination = helpers.filePath("editor.png");
     const auto copied = helpers.filePath("clipboard.png");
     QVERIFY(writeHelper(QDir(helpers.path()), "wl-copy", "/usr/bin/cat > '" + copied.toUtf8() + "'"));
@@ -696,6 +913,12 @@ class SessionTest final : public QObject {
   }
 
  private:
+  static bool writeConfig(const QByteArray& contents) {
+    QFile file(configPath());
+    return QDir().mkpath(QFileInfo(file).absolutePath()) && file.open(QIODevice::WriteOnly) &&
+           file.write(contents) == contents.size();
+  }
+
   QTemporaryDir helpers;
 };
 

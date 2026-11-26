@@ -17,8 +17,12 @@ namespace {
 QFont textFont(const QVariantMap& style) {
   QFont font;
   // Annotation size is measured in source pixels and survives display DPI changes.
-  font.setPixelSize(style.value("size").toInt());
-  font.setBold(style.value("bold").toBool());
+  font.setPixelSize(style.value("size", 24).toInt());
+  const auto family = style.value("family").toString();
+  if (!family.isEmpty()) {
+    font.setFamily(family);
+  }
+  font.setWeight(static_cast<QFont::Weight>(style.value("weight", int(QFont::Normal)).toInt()));
   font.setItalic(style.value("italic").toBool());
   return font;
 }
@@ -146,7 +150,7 @@ void EditorDocument::Mark::paint(QImage& image) const {
   }
 }
 
-void EditorDocument::reset(QImage image) {
+void EditorDocument::reset(QImage image, const AnnotationDefaults& annotations) {
   original_ = std::move(image);
   state_ = {{}, original_.rect()};
   undo_.clear();
@@ -163,11 +167,17 @@ void EditorDocument::reset(QImage image) {
              {"radius", 8},
              {"text", QString()},
              {"size", 24},
-             {"bold", false},
+             {"weight", int(QFont::Normal)},
              {"italic", false},
              {"square", false},
              {"strength", 12}};
   }
+  for (const auto tool : {Pen, Rectangle, Ellipse, Arrow}) {
+    defaults_[tool]["width"] = annotations.strokeWidth;
+  }
+  defaults_[Text]["family"] = annotations.textFontFamily.isEmpty() ? QFont().family() : annotations.textFontFamily;
+  defaults_[Text]["weight"] = annotations.textFontWeight;
+  defaults_[Text]["size"] = annotations.textFontSize;
   notify();
 }
 
@@ -215,6 +225,8 @@ QRectF EditorDocument::textBox() const {
   return {};
 }
 
+QFont EditorDocument::annotationFont() const { return textFont(textDraft_ ? textDraft_->style : properties()); }
+
 QString EditorDocument::draftText() const {
   return textDraft_ ? textDraft_->style.value("text").toString() : QString();
 }
@@ -238,6 +250,8 @@ void EditorDocument::setPropertyValue(const QString& key, const QVariant& value)
       return;
     }
     normalized = color;
+  } else if (key == "weight") {
+    normalized = std::clamp(value.toInt(), 1, 1000);
   } else if (key == "width" || key == "size" || key == "strength" || key == "radius") {
     normalized = std::clamp(value.toInt(), key == "radius" ? 0 : 1, 256);
   }
