@@ -3,5 +3,23 @@
     <file>Launcher.qml</file>
     <file>Editor.qml</file>
     <file>holonight-screenshot.svg</file>
+    <file>icons/arrow.svg</file>
+    <file>icons/blur.svg</file>
+    <file>icons/capture.svg</file>
+    <file>icons/dialog-warning.svg</file>
+    <file>icons/ellipse.svg</file>
+    <file>icons/minus.svg</file>
+    <file>icons/number.svg</file>
+    <file>icons/pen.svg</file>
+    <file>icons/plus.svg</file>
+    <file>icons/rectangle.svg</file>
+    <file>icons/redo.svg</file>
+    <file>icons/region.svg</file>
+    <file>icons/screen.svg</file>
+    <file>icons/select.svg</file>
+    <file>icons/text.svg</file>
+    <file>icons/undo.svg</file>
+    <file>icons/window-close.svg</file>
+    <file>icons/window.svg</file>
   </qresource>
 </RCC>

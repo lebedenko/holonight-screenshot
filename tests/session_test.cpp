@@ -9,6 +9,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileDialog>
+#include <QIcon>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QProcess>
@@ -791,6 +792,15 @@ text_font_size = 36
   }
 
   void editorSavesOnlyOnRequest() {
+    const auto themePaths = QIcon::themeSearchPaths();
+    const auto fallbackPaths = QIcon::fallbackSearchPaths();
+    const QScopeGuard restoreThemePaths([&] {
+      QIcon::setThemeSearchPaths(themePaths);
+      QIcon::setFallbackSearchPaths(fallbackPaths);
+    });
+    QIcon::setThemeSearchPaths({});
+    QIcon::setFallbackSearchPaths({});
+
     QTest::failOnWarning(QRegularExpression("Both point size and pixel size set"));
     Registry registry;
     registry.advertise(screenProtocol);
@@ -823,6 +833,25 @@ text_font_size = 36
     auto* canvas = window->findChild<QQuickItem*>("editor-canvas");
     auto* zoom = window->findChild<QQuickItem*>("editor-zoom");
     QVERIFY(canvas && zoom);
+
+    QSet<QUrl> loadedIcons;
+    QList<QQuickItem*> items{window->contentItem()};
+    while (!items.isEmpty()) {
+      auto* item = items.takeLast();
+      items.append(item->childItems());
+      const auto source = item->property("source").toUrl();
+      if (source.scheme() == "qrc" && source.path().startsWith("/screenshot/icons/")) {
+        QTRY_COMPARE(item->property("status").toString(), QString("Ready"));
+        QVERIFY(item->isVisible());
+        loadedIcons.insert(source);
+      }
+    }
+    const QStringList icons{"select", "pen",   "rectangle", "ellipse",      "arrow", "text", "number",
+                            "blur",   "minus", "plus",      "window-close", "undo",  "redo"};
+    QCOMPARE(loadedIcons.size(), icons.size());
+    for (const auto& name : icons) {
+      QVERIFY2(loadedIcons.contains(QUrl("qrc:/screenshot/icons/" + name + ".svg")), qPrintable(name));
+    }
 
     document->setTool(screenshot::EditorDocument::Pen);
     document->setPropertyValue("width", 5);

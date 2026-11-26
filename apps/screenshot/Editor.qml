@@ -11,7 +11,7 @@ FocusScope {
     readonly property var document: workflow.document
     readonly property var tools: [qsTr("Select"), qsTr("Pen"), qsTr("Rectangle"), qsTr("Ellipse"),
         qsTr("Arrow"), qsTr("Text"), qsTr("Number"), qsTr("Blur")]
-    readonly property var glyphs: ["↖", "✎", "□", "○", "↗", "T", "①", "◈"]
+    readonly property list<string> toolIcons: ["select", "pen", "rectangle", "ellipse", "arrow", "text", "number", "blur"]
     readonly property color panelColor: Qt.tint(palette.window, Qt.alpha(palette.buttonText, 0.045))
     readonly property var zoomLevels: [0.125, 0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4]
     property int zoomIndex: 0
@@ -20,6 +20,12 @@ FocusScope {
     readonly property real scaleFactor: zoomIndex === 0 ? Math.max(0.001, fitScale) : zoomLevels[zoomIndex - 1]
     readonly property bool textFocused: draftInput.activeFocus || widthControl.activeFocus
         || radiusControl.activeFocus || sizeControl.activeFocus || strengthControl.activeFocus
+
+    component IconButton: ToolButton {
+        display: AbstractButton.IconOnly
+        icon.width: 20
+        icon.height: 20
+    }
 
     function zoomStep(direction: int) {
         let index = zoomIndex;
@@ -145,13 +151,13 @@ FocusScope {
                 currentIndex: editor.zoomIndex
                 onActivated: index => editor.zoomIndex = index
             }
-            ToolButton {
-                text: "−"
+            IconButton {
+                icon.source: "qrc:/screenshot/icons/minus.svg"
                 Accessible.name: qsTr("Zoom out")
                 onClicked: editor.zoomStep(-1)
             }
-            ToolButton {
-                text: "+"
+            IconButton {
+                icon.source: "qrc:/screenshot/icons/plus.svg"
                 Accessible.name: qsTr("Zoom in")
                 onClicked: editor.zoomStep(1)
             }
@@ -168,8 +174,8 @@ FocusScope {
                 enabled: !editor.document.busy
                 onClicked: editor.workflow.save()
             }
-            ToolButton {
-                text: "×"
+            IconButton {
+                icon.source: "qrc:/screenshot/icons/window-close.svg"
                 Accessible.name: qsTr("Close editor")
                 onClicked: editor.workflow.closeWindow()
             }
@@ -186,12 +192,12 @@ FocusScope {
 
                 Repeater {
                     model: editor.tools
-                    ToolButton {
+                    IconButton {
                         required property int index
                         required property string modelData
                         Layout.preferredWidth: 40
                         Layout.preferredHeight: 34
-                        text: editor.glyphs[index]
+                        icon.source: "qrc:/screenshot/icons/" + editor.toolIcons[index] + ".svg"
                         Accessible.name: modelData
                         ToolTip.text: modelData
                         ToolTip.visible: hovered
@@ -202,14 +208,14 @@ FocusScope {
                     }
                 }
                 ToolSeparator { orientation: Qt.Horizontal }
-                ToolButton {
-                    text: "↶"
+                IconButton {
+                    icon.source: "qrc:/screenshot/icons/undo.svg"
                     Accessible.name: qsTr("Undo")
                     enabled: editor.document.canUndo
                     onClicked: editor.document.undo()
                 }
-                ToolButton {
-                    text: "↷"
+                IconButton {
+                    icon.source: "qrc:/screenshot/icons/redo.svg"
                     Accessible.name: qsTr("Redo")
                     enabled: editor.document.canRedo
                     onClicked: editor.document.redo()

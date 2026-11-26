@@ -2,7 +2,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
-import QtQuick.Shapes
+import QtQuick.Controls.impl as Impl
 import QtQuick.Templates as T
 
 ApplicationWindow {
@@ -46,11 +46,10 @@ ApplicationWindow {
     component LauncherButton: T.Button {
         id: control
 
-        property string glyph: ""
         property bool primary: false
         readonly property bool accented: enabled && (checked || primary)
         readonly property color foreground: accented ? palette.highlightedText : palette.buttonText
-        property color glyphColor: foreground
+        property color iconColor: foreground
 
         focusPolicy: Qt.StrongFocus
         hoverEnabled: true
@@ -82,24 +81,13 @@ ApplicationWindow {
                 anchors.centerIn: parent
                 spacing: 8
 
-                Shape {
+                Impl.IconImage {
                     width: 20
                     height: 20
                     anchors.verticalCenter: parent.verticalCenter
-                    visible: control.glyph !== ""
-                    preferredRendererType: Shape.CurveRenderer
-
-                    ShapePath {
-                        fillColor: "transparent"
-                        strokeColor: control.glyphColor
-                        strokeWidth: 1.6
-                        capStyle: ShapePath.RoundCap
-                        joinStyle: ShapePath.RoundJoin
-
-                        PathSvg {
-                            path: control.glyph
-                        }
-                    }
+                    visible: control.icon.source.toString() !== ""
+                    source: control.icon.source
+                    color: control.iconColor
                 }
 
                 Text {
@@ -177,9 +165,9 @@ ApplicationWindow {
                             anchors.fill: parent
                             objectName: "target-" + targetCell.modelData.name
                             text: targetCell.modelData.name === "area" ? qsTr("Region") : targetCell.modelData.name === "window" ? qsTr("Window") : qsTr("Screen")
-                            glyph: targetCell.modelData.name === "area" ? "M2 7 V3 H7 M13 3 H18 V7 M18 13 V17 H13 M7 17 H2 V13"
-                                 : targetCell.modelData.name === "window" ? "M3 3 H17 V17 H3 Z M3 7 H17"
-                                 : "M2 3 H18 V14 H2 Z M10 14 V18 M6 18 H14"
+                            icon.source: targetCell.modelData.name === "area" ? "qrc:/screenshot/icons/region.svg"
+                                       : targetCell.modelData.name === "window" ? "qrc:/screenshot/icons/window.svg"
+                                       : "qrc:/screenshot/icons/screen.svg"
                             checkable: true
                             checked: root.workflow.target === targetCell.modelData.name
                             enabled: targetCell.modelData.available
@@ -252,8 +240,8 @@ ApplicationWindow {
                 anchors.verticalCenter: parent.verticalCenter
                 height: cursorRow.height
                 visible: root.diagnostic !== ""
-                glyph: "M10 2 L18.5 17 H1.5 Z M10 7 V11 M10 14 V14.2"
-                glyphColor: root.warningPalette?.warning ?? root.palette.windowText
+                icon.source: "qrc:/screenshot/icons/dialog-warning.svg"
+                iconColor: root.warningPalette?.warning ?? root.palette.windowText
                 Accessible.name: qsTr("Show capture details")
                 ToolTip.text: Accessible.name
                 ToolTip.delay: 500
@@ -313,7 +301,7 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 text: qsTr("Capture")
                 primary: true
-                glyph: "M2 6 H6 L8 3 H12 L14 6 H18 V17 H2 Z M13 11 A3 3 0 1 1 7 11 A3 3 0 1 1 13 11 Z"
+                icon.source: "qrc:/screenshot/icons/capture.svg"
                 enabled: root.workflow.target !== ""
                 onEnabledChanged: if (enabled && visible)
                     forceActiveFocus(Qt.TabFocusReason)

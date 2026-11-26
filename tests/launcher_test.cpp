@@ -1,15 +1,18 @@
 #include <QAccessible>
 #include <QGuiApplication>
+#include <QIcon>
 #include <QKeyEvent>
 #include <QPalette>
 #include <QQmlComponent>
 #include <QQmlEngine>
 #include <QQuickItem>
 #include <QQuickWindow>
+#include <QScopeGuard>
 #include <QSignalSpy>
 #include <QTest>
 #include <QVariant>
 
+#include <algorithm>
 #include <memory>
 
 class FakeWorkflow final : public QObject {
@@ -111,6 +114,46 @@ class LauncherTest final : public QObject {
   Q_OBJECT
 
  private slots:
+  void bundledIconsLoadWithoutTheme() {
+    const auto themePaths = QIcon::themeSearchPaths();
+    const auto fallbackPaths = QIcon::fallbackSearchPaths();
+    const QScopeGuard restoreThemePaths([&] {
+      QIcon::setThemeSearchPaths(themePaths);
+      QIcon::setFallbackSearchPaths(fallbackPaths);
+    });
+    QIcon::setThemeSearchPaths({});
+    QIcon::setFallbackSearchPaths({});
+
+    FakeWorkflow workflow;
+    workflow.publish({"area", "screen"}, "area");
+    workflow.setMessage("Screen capture details");
+    QQmlEngine engine;
+    QQmlComponent component(&engine, QUrl("qrc:/screenshot/Launcher.qml"));
+    std::unique_ptr<QObject> launcher(
+        component.createWithInitialProperties({{"workflow", QVariant::fromValue(&workflow)}}));
+    QVERIFY2(launcher, qPrintable(component.errorString()));
+    auto* window = qobject_cast<QQuickWindow*>(launcher.get());
+    QVERIFY(window);
+
+    const QMap<QString, QString> icons{{"target-area", "region"},
+                                       {"target-window", "window"},
+                                       {"target-screen", "screen"},
+                                       {"capture", "capture"},
+                                       {"capture-details-button", "dialog-warning"}};
+    for (auto it = icons.cbegin(); it != icons.cend(); ++it) {
+      auto* control = findItem(window->contentItem(), it.key());
+      QVERIFY2(control, qPrintable(it.key()));
+      const QUrl source("qrc:/screenshot/icons/" + it.value() + ".svg");
+      const auto images = control->findChildren<QQuickItem*>();
+      const auto image = std::ranges::find_if(
+          images, [&source](QQuickItem* item) { return item->property("source").toUrl() == source; });
+      QVERIFY2(image != images.cend(), qPrintable(source.toString()));
+      QTRY_COMPARE((*image)->property("status").toString(), QString("Ready"));
+      QVERIFY((*image)->isVisible());
+      QCOMPARE((*image)->size(), QSizeF(20, 20));
+    }
+  }
+
   void startupGeometry_data() {
     QTest::addColumn<QStringList>("available");
     QTest::addColumn<QString>("selected");
