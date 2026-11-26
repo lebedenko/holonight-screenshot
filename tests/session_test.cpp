@@ -5,12 +5,14 @@
 #include "workflow.h"
 
 #include <QApplication>
+#include <QColorSpace>
 #include <QDir>
 #include <QFile>
-#include <QFileDialog>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QProcess>
+#include <QQuickItem>
+#include <QQuickWindow>
 #include <QScopeGuard>
 #include <QSettings>
 #include <QSignalSpy>
@@ -496,7 +498,7 @@ class SessionTest final : public QObject {
     QTRY_VERIFY(captured);
   }
 
-  void launcherRestoresCustomDelayAndCancelsDirectSave() {
+  void launcherRestoresEditorAndPresetDelay() {
     Registry registry;
     registry.advertiseWindows(true);
     registry.advertise(sourceProtocol);
@@ -513,73 +515,144 @@ class SessionTest final : public QObject {
     QTemporaryDir state;
     QVERIFY(state.isValid());
     QVERIFY(qputenv("XDG_STATE_HOME", state.path().toUtf8()));
-    const auto destination = state.filePath("existing.png");
-    QFile existing(destination);
-    QVERIFY(existing.open(QIODevice::WriteOnly));
-    QCOMPARE(existing.write("existing"), 8);
-    existing.close();
+    const auto ini = state.filePath("holonight-screenshot/launcher.ini");
+    QSettings settings(ini, QSettings::IniFormat);
+    settings.setValue("delayMs", 1234);
+    settings.sync();
 
     {
       QVERIFY(registry.connectInProcess());
       Workflow launcher({});
       launcher.start();
       QTRY_COMPARE(launcher.target(), QString("window"));
-      launcher.setDelayMs(2147483647);
-      launcher.setDelayMs(-1);
-      QCOMPARE(launcher.delayMs(), 2147483647);
+      QCOMPARE(launcher.delayMs(), 0);
+      QVERIFY(!launcher.openEditor());
+      launcher.setDelayMs(5000);
+      launcher.setDelayMs(1234);
+      QCOMPARE(launcher.delayMs(), 5000);
+      launcher.setOpenEditor(true);
     }
 
     QVERIFY(registry.connectInProcess());
     Workflow launcher({});
     launcher.start();
-    QCOMPARE(launcher.delayMs(), 2147483647);
+    QCOMPARE(launcher.delayMs(), 5000);
+    QVERIFY(launcher.openEditor());
     QTRY_COMPARE(launcher.target(), QString("window"));
-    bool dialogOpened = false;
-    QTimer::singleShot(0, &launcher, [&] {
-      if (auto* dialog = qobject_cast<QFileDialog*>(QApplication::activeModalWidget())) {
-        dialogOpened = true;
-        dialog->selectFile(destination);
-        dialog->reject();
-      }
-    });
-    launcher.saveDirectly();
-    QVERIFY(dialogOpened);
-    QCOMPARE(launcher.page(), QString("launcher"));
-    QVERIFY(existing.open(QIODevice::ReadOnly));
-    QCOMPARE(existing.readAll(), QByteArray("existing"));
     launcher.startCapture();
     QCOMPARE(launcher.page(), QString("picker"));
   }
 
-  void screenPreviewRoutes_data() {
-    QTest::addColumn<bool>("editor");
-    QTest::addColumn<bool>("fixedPath");
-    QTest::newRow("screen preview") << false << false;
-    QTest::newRow("editor") << true << false;
-    QTest::newRow("editor with destination") << true << true;
+  void cliClipboard_data() {
+    QTest::addColumn<bool>("succeed");
+    QTest::newRow("copy") << true;
+    QTest::newRow("helper failure") << false;
   }
 
-  void screenPreviewRoutes() {
-    QFETCH(bool, editor);
-    QFETCH(bool, fixedPath);
+  void cliClipboard() {
+    QFETCH(bool, succeed);
+    Registry registry;
+    registry.advertise(screenProtocol);
+    registry.advertise(layoutProtocol);
+    const QDir directory(helpers.path());
+    QVERIFY(writeHelper(directory, "wlr-randr", layout));
+    QVERIFY(writeHelper(directory, "grim", grimScript(true)));
+    QVERIFY(writeHelper(directory, "wl-copy",
+                        succeed ? QByteArray("test \"$*\" = '--type image/png' && /usr/bin/cat > \"$CLIPBOARD_PNG\"")
+                                : QByteArray("exit 1")));
+    const auto copied = helpers.filePath("clipboard.png");
+    auto environment = QProcessEnvironment::systemEnvironment();
+    environment.insert("CLIPBOARD_PNG", copied);
+    QProcess cli;
+    QVERIFY(registry.startCli(cli, {"--target", "screen"}, environment));
+    QTRY_COMPARE(cli.state(), QProcess::NotRunning);
+    QCOMPARE(cli.exitCode(), succeed ? 0 : 1);
+    if (succeed) {
+      QCOMPARE(QImage(copied).size(), QSize(1, 1));
+    } else {
+      QVERIFY(cli.readAllStandardError().contains("wl-copy"));
+    }
+  }
+
+  void editorSavesOnlyOnRequest() {
+    QTest::failOnWarning(QRegularExpression("Both point size and pixel size set"));
     Registry registry;
     registry.advertise(screenProtocol);
     registry.advertise(layoutProtocol);
     QVERIFY(writeHelper(QDir(helpers.path()), "wlr-randr", layout));
     QVERIFY(writeHelper(QDir(helpers.path()), "grim", grimScript(true)));
+    const auto destination = helpers.filePath("editor.png");
+    const auto copied = helpers.filePath("clipboard.png");
+    QVERIFY(writeHelper(QDir(helpers.path()), "wl-copy", "/usr/bin/cat > '" + copied.toUtf8() + "'"));
     QVERIFY(registry.connectInProcess());
-    const auto destination = helpers.filePath("preview.png");
-    Workflow workflow({.path = fixedPath ? destination : QString(), .target = CaptureTarget::Screen, .editor = editor});
+    Workflow workflow({.path = destination, .target = CaptureTarget::Screen, .editor = true});
     workflow.start();
-    QTRY_COMPARE(workflow.page(), QString("preview"));
-    QCOMPARE(workflow.editing(), editor);
-    QCOMPARE(workflow.fixedSavePath(), fixedPath);
+    QTRY_COMPARE(workflow.page(), QString("editor"));
+    QVERIFY(workflow.fixedSavePath());
     QVERIFY(!QFileInfo::exists(destination));
-    if (fixedPath) {
+    auto* document = qobject_cast<screenshot::EditorDocument*>(workflow.document());
+    QVERIFY(document);
+    QImage fixture(160, 100, QImage::Format_RGB32);
+    fixture.setColorSpace(QColorSpace::DisplayP3);
+    fixture.fill(Qt::black);
+    document->reset(fixture);
+    document->startCrop();
+    document->begin({10, 10}, 1);
+    document->finish({150, 90});
+    document->applyCrop();
+
+    QTRY_VERIFY(qobject_cast<QQuickWindow*>(QGuiApplication::focusWindow()));
+    auto* window = qobject_cast<QQuickWindow*>(QGuiApplication::focusWindow());
+    auto* canvas = window->findChild<QQuickItem*>("editor-canvas");
+    auto* zoom = window->findChild<QQuickItem*>("editor-zoom");
+    QVERIFY(canvas && zoom);
+
+    document->setTool(screenshot::EditorDocument::Pen);
+    document->setPropertyValue("width", 5);
+    const auto clickCanvas = [&](QPointF fraction) {
+      const auto point = canvas->mapToScene({canvas->width() * fraction.x(), canvas->height() * fraction.y()});
+      QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, point.toPoint());
       workflow.save();
-      QCOMPARE(QImage(destination).size(), QSize(1, 1));
-      QCOMPARE(workflow.page(), QString("preview"));
-    }
+      QVERIFY(!QFileInfo::exists(destination));
+      QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, point.toPoint());
+    };
+    QVERIFY(canvas->width() > 140);
+    clickCanvas({0.25, 0.25});
+    QVERIFY(QMetaObject::invokeMethod(zoom, "activated", Q_ARG(int, 5)));
+    QTRY_COMPARE(canvas->width(), 140);
+    clickCanvas({0.75, 0.75});
+    const auto rendered = document->render();
+    QVERIFY(rendered.pixelColor(35, 20) != QColor(Qt::black));
+    QVERIFY(rendered.pixelColor(105, 60) != QColor(Qt::black));
+    document->setTool(screenshot::EditorDocument::Text);
+    auto* input = window->findChild<QQuickItem*>("annotation-text-input");
+    QVERIFY(input);
+    const auto start = canvas->mapToScene({10, 10}).toPoint();
+    const auto end = canvas->mapToScene({125, 70}).toPoint();
+    QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, start);
+    QTest::mouseMove(window, end);
+    QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, end);
+    QTRY_VERIFY(input->hasActiveFocus());
+    QCOMPARE(input->property("text").toString(), QString());
+    QTest::keyClick(window, Qt::Key_A);
+    QTest::keyClick(window, Qt::Key_Return);
+    QTest::keyClick(window, Qt::Key_B);
+    QCOMPARE(input->property("text").toString(), QStringLiteral("a\nb"));
+    workflow.save();
+    QVERIFY(!QFileInfo::exists(destination));
+    QTest::keyClick(window, Qt::Key_Return, Qt::ControlModifier);
+    QTRY_VERIFY(!document->editingText());
+    QVERIFY(document->render() != rendered);
+    workflow.copy();
+    QVERIFY(!QFileInfo::exists(destination));
+    workflow.save();
+    const QImage saved(destination);
+    const QImage clipboard(copied);
+    QCOMPARE(saved.size(), QSize(140, 80));
+    QCOMPARE(clipboard, saved);
+    QCOMPARE(clipboard.colorSpace(), saved.colorSpace());
+    QCOMPARE(saved.colorSpace(), document->render().colorSpace());
+    QCOMPARE(workflow.page(), QString("editor"));
   }
 
   void screenOutput() {

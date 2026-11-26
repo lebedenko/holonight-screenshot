@@ -37,7 +37,7 @@ tasks:
     cmds:
       - python3 scripts/quality.py tidy --build "build/{{.PRESET}}"
   qml-lint:
-    desc: Lint the launcher and region overlay with the selected Qt SDK
+    desc: Lint the launcher, editor, and region overlay with the selected Qt SDK
     cmds:
       - cmake --preset "{{.PRESET}}"
       - cmake --build --preset "{{.PRESET}}" --target qml-lint

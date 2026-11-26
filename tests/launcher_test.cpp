@@ -15,6 +15,7 @@
 class FakeWorkflow final : public QObject {
   Q_OBJECT
   Q_PROPERTY(int delayMs MEMBER delayMs NOTIFY preferencesChanged)
+  Q_PROPERTY(bool openEditor MEMBER openEditor NOTIFY preferencesChanged)
   Q_PROPERTY(bool includeCursor MEMBER includeCursor NOTIFY preferencesChanged)
   Q_PROPERTY(QString page MEMBER page NOTIFY pageChanged)
   Q_PROPERTY(QString target MEMBER target NOTIFY modesChanged)
@@ -30,6 +31,7 @@ class FakeWorkflow final : public QObject {
   QString selectedWindow;
   int delayMs = 0;
   bool includeCursor = false;
+  bool openEditor = false;
   int delay = -1;
   bool cursor = false;
 
@@ -222,9 +224,8 @@ class LauncherTest final : public QObject {
     QVERIFY(workflow.cursor);
   }
 
-  void customDelayValidatesAndPreservesExactValue() {
+  void editorCheckboxReplacesCustomDelayAndDirectSave() {
     FakeWorkflow workflow;
-    workflow.delayMs = 1234;
     QQmlEngine engine;
     QQmlComponent component(&engine, QUrl(QStringLiteral("qrc:/screenshot/Launcher.qml")));
     std::unique_ptr<QObject> launcher(
@@ -232,28 +233,14 @@ class LauncherTest final : public QObject {
     QVERIFY2(launcher, qPrintable(component.errorString()));
     auto* window = qobject_cast<QQuickWindow*>(launcher.get());
     QVERIFY(window && QTest::qWaitForWindowActive(window));
-    auto* custom = findItem(window->contentItem(), "delay-custom");
-    auto* dialog = launcher->findChild<QObject*>("custom-delay-dialog");
-    auto* input = launcher->findChild<QQuickItem*>("custom-delay-input");
-    QVERIFY(custom && dialog && input);
-    QVERIFY(custom->property("checked").toBool());
-    custom->forceActiveFocus();
+    auto* checkbox = findItem(window->contentItem(), "open-editor");
+    QVERIFY(checkbox);
+    QVERIFY(!checkbox->property("checked").toBool());
+    QVERIFY(!findItem(window->contentItem(), "delay-custom"));
+    QVERIFY(!findItem(window->contentItem(), "save-directly"));
+    checkbox->forceActiveFocus();
     QTest::keyClick(window, Qt::Key_Space);
-    QTRY_VERIFY(dialog->property("opened").toBool());
-    QCOMPARE(input->property("text").toString(), QString("1234"));
-
-    for (const auto& value : {"", "-1", "1.5", "2147483648"}) {
-      input->setProperty("text", value);
-      QVERIFY(!input->property("validDelay").toBool());
-    }
-    QTest::keyClick(window, Qt::Key_Return);
-    QVERIFY(dialog->property("opened").toBool());
-    QCOMPARE(workflow.delayMs, 1234);
-    input->setProperty("text", "2147483647");
-    QVERIFY(input->property("validDelay").toBool());
-    QTest::keyClick(window, Qt::Key_Return);
-    QTRY_VERIFY(!dialog->property("opened").toBool());
-    QCOMPARE(workflow.delayMs, 2147483647);
+    QVERIFY(workflow.openEditor);
   }
 
   void diagnosticPopover() {

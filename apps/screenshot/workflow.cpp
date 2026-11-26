@@ -15,7 +15,6 @@
 #include <QGuiApplication>
 #include <QJsonArray>
 #include <QJsonDocument>
-#include <QPainter>
 #include <QProcess>
 #include <QQmlApplicationEngine>
 #include <QQuickImageProvider>
@@ -58,7 +57,7 @@ void exitWithError(const QString& reason) {
   QCoreApplication::exit(1);
 }
 
-void notifyPreviewAction(QObject* context, const QString& title, const QString& error) {
+void notifyOutput(QObject* context, const QString& title, const QString& error) {
   auto message = QDBusMessage::createMethodCall(
       QStringLiteral("org.freedesktop.Notifications"), QStringLiteral("/org/freedesktop/Notifications"),
       QStringLiteral("org.freedesktop.Notifications"), QStringLiteral("Notify"));
@@ -130,55 +129,23 @@ void suppressHyprlandCloseAnimation(QObject* context, std::function<void(bool)> 
        QStringLiteral(R"(hl.dsp.window.set_prop({ window = "%1", prop = "no_anim", value = "1" }))").arg(selector)});
 }
 
-class PreviewImage final : public QQuickImageProvider {
+class EditorImage final : public QQuickImageProvider {
  public:
-  explicit PreviewImage(const QImage& image) : QQuickImageProvider(Image), image_(image) {}
+  explicit EditorImage(const EditorDocument& document) : QQuickImageProvider(Image), document_(document) {}
 
-  QImage requestImage(const QString&, QSize* size, const QSize& requestedSize) override {
+  QImage requestImage(const QString&, QSize* size, const QSize&) override {
+    auto image = document_.render(true);
     if (size) {
-      *size = image_.size();
+      *size = image.size();
     }
-    auto display = image_;
-    if (!requestedSize.isEmpty() && requestedSize != image_.size()) {
-      display = image_.scaled(requestedSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-    }
-    if (display.colorSpace().isValid() && display.colorSpace() != QColorSpace::SRgb) {
-      display.convertToColorSpace(QColorSpace::SRgb);
-    }
-    return display;
+    return image;
   }
 
  private:
-  const QImage& image_;
+  const EditorDocument& document_;
 };
 
-class AnnotationImage final : public QQuickImageProvider {
- public:
-  AnnotationImage(const QImage& image, const Annotations& annotations)
-      : QQuickImageProvider(Image), image_(image), annotations_(annotations) {}
-
-  QImage requestImage(const QString&, QSize* size, const QSize& requestedSize) override {
-    const auto rasterSize = requestedSize.isEmpty() ? image_.size() : requestedSize;
-    if (size) {
-      *size = rasterSize;
-    }
-    QImage overlay(rasterSize, QImage::Format_ARGB32_Premultiplied);
-    if (overlay.isNull()) {
-      return {};
-    }
-    overlay.fill(Qt::transparent);
-    if (!image_.isNull() && !annotations_.empty()) {
-      QPainter painter(&overlay);
-      painter.scale(qreal(overlay.width()) / image_.width(), qreal(overlay.height()) / image_.height());
-      annotations_.paint(painter, image_.rect(), QColorSpace::SRgb, 1, true);
-    }
-    return overlay;
-  }
-
- private:
-  const QImage& image_;
-  const Annotations& annotations_;
-};
+bool presetDelay(int delay) { return delay == 0 || delay == 3000 || delay == 5000 || delay == 10000; }
 
 }  // namespace
 
@@ -192,8 +159,7 @@ bool Workflow::loadUi() {
   }
   engine_ = std::make_unique<QQmlApplicationEngine>();
   engine_->setInitialProperties({{QStringLiteral("workflow"), QVariant::fromValue(static_cast<QObject*>(this))}});
-  engine_->addImageProvider(QStringLiteral("capture"), new PreviewImage(result_));
-  engine_->addImageProvider(QStringLiteral("annotations"), new AnnotationImage(result_, annotations_));
+  engine_->addImageProvider(QStringLiteral("capture"), new EditorImage(document_));
   engine_->load(QUrl(QStringLiteral("qrc:/screenshot/Launcher.qml")));
   if (!engine_->rootObjects().isEmpty()) {
     window_ = qobject_cast<QWindow*>(engine_->rootObjects().front());
@@ -258,9 +224,10 @@ void Workflow::loadPreferences() {
   savedTarget_ = settings.value("target").toString();
   bool validDelay = false;
   const int delay = settings.value("delayMs").toInt(&validDelay);
-  options_.delayMs = validDelay && delay >= 0 ? delay : 0;
+  options_.delayMs = validDelay && presetDelay(delay) ? delay : 0;
   options_.cursor =
       settings.value("includeCursor").toString() == "true" ? CursorPolicy::Include : CursorPolicy::Exclude;
+  options_.editor = settings.value("openEditor", false).toBool();
   emit preferencesChanged();
 }
 
@@ -282,7 +249,7 @@ void Workflow::restoreTarget() {
 }
 
 void Workflow::setDelayMs(int delay) {
-  if (!launcher_ || delay == options_.delayMs || delay < 0) {
+  if (!launcher_ || delay == options_.delayMs || !presetDelay(delay)) {
     return;
   }
   options_.delayMs = delay;
@@ -297,6 +264,14 @@ void Workflow::setIncludeCursor(bool include) {
   options_.cursor = include ? CursorPolicy::Include : CursorPolicy::Exclude;
   savePreference("includeCursor", include);
   emit preferencesChanged();
+}
+
+void Workflow::setOpenEditor(bool open) {
+  if (launcher_ && open != options_.editor) {
+    options_.editor = open;
+    savePreference("openEditor", open);
+    emit preferencesChanged();
+  }
 }
 
 void Workflow::selectMode(const QString& name) {
@@ -314,13 +289,10 @@ void Workflow::selectMode(const QString& name) {
   }
 }
 
-void Workflow::startCapture() { beginCapture(options_.path); }
-
-void Workflow::beginCapture(const QString& path) {
+void Workflow::startCapture() {
   if (!ready_ || busy_ || choosingPath_ || !options_.target || !session_.capabilities().supports(*options_.target)) {
     return;
   }
-  options_.path = path;
   busy_ = true;
   setMessage({});
   if (*options_.target == CaptureTarget::Window) {
@@ -332,20 +304,6 @@ void Workflow::beginCapture(const QString& path) {
     captureAfterHide();
   } else {
     capture({});
-  }
-}
-
-void Workflow::saveDirectly() {
-  if (!launcher_ || page_ != "launcher" || busy_ || choosingPath_ || !options_.target) {
-    return;
-  }
-  QString path;
-  {
-    const QScopedValueRollback choosing(choosingPath_, true);
-    path = choosePngPath();
-  }
-  if (!path.isEmpty()) {
-    beginCapture(path);
   }
 }
 
@@ -457,28 +415,26 @@ void Workflow::captured(const CaptureFrame& frame) {
 }
 
 void Workflow::handleResult(const QImage& image) {
-  if (!options_.editor && !options_.path.isEmpty()) {
-    const auto error = savePng(options_.path, image);
-    if (!error.isEmpty()) {
-      failed(error);
-    } else if (launcher_) {
-      releaseCapture();
-      setPage(QStringLiteral("launcher"));
-      notifyPreviewAction(this, tr("Screenshot saved."), {});
-    } else {
-      QCoreApplication::exit(0);
+  if (options_.editor) {
+    releaseCapture();
+    document_.reset(image);
+    if (loadUi()) {
+      setPage(QStringLiteral("editor"));
     }
     return;
   }
 
-  result_ = image;
+  const auto error = options_.path.isEmpty() ? copyPng(image) : savePng(options_.path, image);
+  if (!error.isEmpty()) {
+    failed(error);
+    return;
+  }
   releaseCapture();
-  if (loadUi()) {
-    editing_ = options_.editor;
-    ++revision_;
-    emit previewChanged();
-    updateAnnotations();
-    setPage(QStringLiteral("preview"));
+  if (launcher_) {
+    setPage(QStringLiteral("launcher"));
+    notifyOutput(this, tr("Copied to clipboard."), {});
+  } else {
+    QCoreApplication::exit(0);
   }
 }
 
@@ -489,9 +445,6 @@ void Workflow::releaseCapture() {
   selectedWindow_.clear();
   emit selectionChanged();
   busy_ = false;
-  if (launcher_) {
-    options_.path.clear();
-  }
 }
 
 void Workflow::failed(const QString& reason) {
@@ -516,100 +469,33 @@ void Workflow::canceled() {
 void Workflow::closeWindow() {
   if (page_ == "picker") {
     QMetaObject::invokeMethod(this, &Workflow::cancelPicker, Qt::QueuedConnection);
+  } else if (page_ == "editor" && choosingPath_) {
+    return;
+  } else if (page_ == "editor" && launcher_) {
+    setPage(QStringLiteral("launcher"));
+    document_.reset({});
   } else {
     QCoreApplication::exit(0);
   }
 }
 
-void Workflow::newCapture() {
-  if (choosingPath_ || strokeActive()) {
-    return;
-  }
-  if (!launcher_) {
-    launcher_ = true;
-    loadPreferences();
-    restoreTarget();
-  }
-  options_.path.clear();
-  options_.editor = false;
-  result_ = {};
-  annotations_ = {};
-  editing_ = false;
-  updateAnnotations();
-  setMessage({});
-  setPage(QStringLiteral("launcher"));
-}
-
-void Workflow::setEditing(bool editing) {
-  if (page_ == "preview" && !strokeActive() && !choosingPath_) {
-    editing_ = editing;
-    emit annotationChanged();
-  }
-}
-
-void Workflow::beginStroke(int tool, const QColor& color, QPointF point, QRectF bounds) {
-  using Tool = Annotations::Tool;
-  if (page_ == "preview" && editing_ && !choosingPath_ && !bounds.isEmpty() && bounds.contains(point) &&
-      tool >= static_cast<int>(Tool::Pen) && tool <= static_cast<int>(Tool::Rectangle) &&
-      annotations_.begin(static_cast<Tool>(tool), color, Annotations::imagePoint(point, bounds, result_.size()))) {
-    updateAnnotations();
-  }
-}
-
-void Workflow::moveStroke(QPointF point, QRectF bounds) {
-  if (strokeActive() && !bounds.isEmpty()) {
-    annotations_.move(Annotations::imagePoint(point, bounds, result_.size()));
-    updateAnnotations();
-  }
-}
-
-void Workflow::finishStroke(QPointF point, QRectF bounds) {
-  if (strokeActive()) {
-    if (bounds.isEmpty()) {
-      annotations_.cancelStroke();
-    } else {
-      annotations_.finish(Annotations::imagePoint(point, bounds, result_.size()));
-    }
-    updateAnnotations();
-  }
-}
-
-void Workflow::cancelStroke() {
-  if (strokeActive()) {
-    annotations_.cancelStroke();
-    updateAnnotations();
-  }
-}
-
-void Workflow::undo() {
-  if (editing_ && canUndo() && !choosingPath_) {
-    annotations_.undo();
-    updateAnnotations();
-  }
-}
-
-void Workflow::updateAnnotations() {
-  ++annotationRevision_;
-  emit annotationChanged();
-}
-
 void Workflow::copy() {
-  if (page_ != "preview" || strokeActive() || choosingPath_) {
+  if (page_ != "editor" || document_.busy() || choosingPath_) {
     return;
   }
-  const auto error = copyPng(annotations_.render(result_));
-  notifyPreviewAction(this, error.isEmpty() ? tr("Copied to clipboard.") : tr("Could not copy screenshot"), error);
+  const auto error = copyPng(document_.render());
+  notifyOutput(this, error.isEmpty() ? tr("Copied to clipboard.") : tr("Could not copy screenshot"), error);
 }
 
 void Workflow::save() {
-  if (page_ != "preview" || strokeActive() || choosingPath_) {
+  if (page_ != "editor" || document_.busy() || choosingPath_) {
     return;
   }
   const QScopedValueRollback choosing(choosingPath_, true);
   const auto path = options_.path.isEmpty() ? choosePngPath() : options_.path;
   if (!path.isEmpty()) {
-    const auto error = savePng(path, annotations_.render(result_));
-    notifyPreviewAction(this, error.isEmpty() ? tr("Screenshot saved.") : tr("Could not save screenshot"), error);
+    const auto error = savePng(path, document_.render());
+    notifyOutput(this, error.isEmpty() ? tr("Screenshot saved.") : tr("Could not save screenshot"), error);
   }
 }
 

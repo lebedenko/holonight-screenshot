@@ -77,11 +77,6 @@ std::optional<screenshot::Options> parseOptions(int argc, char** argv) {
              (parser.isSet(output) || parser.isSet(delay) || parser.isSet(cursor) || options.editor)) {
     options.target = CaptureTarget::Screen;
   }
-  if (options.target == CaptureTarget::ActiveWindow && options.path.isEmpty() && !options.editor) {
-    reportFailure(QStringLiteral("Active-window capture requires --output PATH or --editor."));
-    return std::nullopt;
-  }
-
   bool validDelay = false;
   options.delayMs = parser.value(delay).toInt(&validDelay);
   if (!validDelay || options.delayMs < 0 || parser.values(delay).size() > 1) {
@@ -111,10 +106,9 @@ int main(int argc, char** argv) {
   // Qt must not interpret a destination named like a platform option as an option.
   static int appArgc = 1;
   static char* appArgv[] = {argv[0], nullptr};
-  const bool headlessSave =
-      !options->editor && !options->path.isEmpty() &&
-      (options->target == CaptureTarget::Screen || options->target == CaptureTarget::ActiveWindow);
-  if (options->list || headlessSave) {
+  const bool headlessCapture =
+      !options->editor && (options->target == CaptureTarget::Screen || options->target == CaptureTarget::ActiveWindow);
+  if (options->list || headlessCapture) {
     QCoreApplication app(appArgc, appArgv);
     return run(app, *options);
   }

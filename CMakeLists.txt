@@ -42,5 +42,6 @@ add_custom_target(qml-lint
     --resource "${CMAKE_CURRENT_SOURCE_DIR}/apps/screenshot/launcher.qrc"
     --resource "${CMAKE_CURRENT_SOURCE_DIR}/src/capture/region-preview.qrc"
     "${CMAKE_CURRENT_SOURCE_DIR}/apps/screenshot/Launcher.qml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/apps/screenshot/Editor.qml"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/capture/RegionPreview.qml"
   VERBATIM)

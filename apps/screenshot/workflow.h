@@ -1,8 +1,8 @@
 #pragma once
 
-#include "annotations.h"
 #include "capture_session.h"
 #include "desktop_acquisition.h"
+#include "editor_document.h"
 
 #include <QImage>
 #include <QObject>
@@ -39,12 +39,9 @@ class Workflow final : public QObject {
   Q_PROPERTY(QVariantList windows READ windows NOTIFY windowsChanged)
   Q_PROPERTY(QString selectedWindow READ selectedWindow NOTIFY selectionChanged)
   Q_PROPERTY(QString message READ message NOTIFY messageChanged)
-  Q_PROPERTY(bool fixedSavePath READ fixedSavePath NOTIFY previewChanged)
-  Q_PROPERTY(bool editing READ editing NOTIFY annotationChanged)
-  Q_PROPERTY(bool strokeActive READ strokeActive NOTIFY annotationChanged)
-  Q_PROPERTY(bool canUndo READ canUndo NOTIFY annotationChanged)
-  Q_PROPERTY(int annotationRevision READ annotationRevision NOTIFY annotationChanged)
-  Q_PROPERTY(int revision READ revision NOTIFY previewChanged)
+  Q_PROPERTY(bool fixedSavePath READ fixedSavePath CONSTANT)
+  Q_PROPERTY(bool openEditor READ openEditor WRITE setOpenEditor NOTIFY preferencesChanged)
+  Q_PROPERTY(QObject* document READ document CONSTANT)
 
  public:
   explicit Workflow(Options options);
@@ -60,29 +57,17 @@ class Workflow final : public QObject {
   QVariantList windows() const;
   QString selectedWindow() const { return selectedWindow_; }
   QString message() const { return message_; }
-  int revision() const { return revision_; }
-
+  bool fixedSavePath() const { return !options_.path.isEmpty(); }
+  bool openEditor() const { return options_.editor; }
+  void setOpenEditor(bool open);
+  QObject* document() { return &document_; }
   Q_INVOKABLE void selectMode(const QString& name);
-  bool fixedSavePath() const { return options_.editor && !options_.path.isEmpty(); }
-  bool editing() const { return editing_; }
-  bool strokeActive() const { return annotations_.active(); }
-  bool canUndo() const { return annotations_.canUndo(); }
-  int annotationRevision() const { return annotationRevision_; }
-
   Q_INVOKABLE void startCapture();
-  Q_INVOKABLE void saveDirectly();
-  Q_INVOKABLE void setEditing(bool editing);
-  Q_INVOKABLE void beginStroke(int tool, const QColor& color, QPointF point, QRectF bounds);
-  Q_INVOKABLE void moveStroke(QPointF point, QRectF bounds);
-  Q_INVOKABLE void finishStroke(QPointF point, QRectF bounds);
-  Q_INVOKABLE void cancelStroke();
-  Q_INVOKABLE void undo();
   Q_INVOKABLE void selectWindow(const QString& id);
   Q_INVOKABLE void moveSelection(int offset);
   Q_INVOKABLE void confirmWindow();
   Q_INVOKABLE void cancelPicker();
   Q_INVOKABLE void closeWindow();
-  Q_INVOKABLE void newCapture();
   Q_INVOKABLE void copy();
   Q_INVOKABLE void save();
 
@@ -93,8 +78,6 @@ class Workflow final : public QObject {
   void windowsChanged();
   void selectionChanged();
   void messageChanged();
-  void previewChanged();
-  void annotationChanged();
 
  private:
   bool loadUi();
@@ -102,12 +85,10 @@ class Workflow final : public QObject {
   void restoreTarget();
   QList<CaptureWindow> pickableWindows() const;
   void refreshPicker();
-  void beginCapture(const QString& path);
   void captureAfterHide(const QString& id = {});
   void capture(const QString& id);
   void captured(const CaptureFrame& frame);
   void handleResult(const QImage& image);
-  void updateAnnotations();
   void releaseCapture();
   void failed(const QString& reason);
   void canceled();
@@ -119,16 +100,12 @@ class Workflow final : public QObject {
   bool ready_ = false;
   bool busy_ = false;
   bool choosingPath_ = false;
-  bool editing_ = false;
   QString savedTarget_;
   QString page_;
   QString message_;
   QString selectedWindow_;
-  int revision_ = 0;
   CaptureSession session_;
-  QImage result_;
-  Annotations annotations_;
-  int annotationRevision_ = 0;
+  EditorDocument document_;
   std::unique_ptr<QQmlApplicationEngine> engine_;
   QWindow* window_ = nullptr;
   std::unique_ptr<GrimAcquisition> acquisition_;

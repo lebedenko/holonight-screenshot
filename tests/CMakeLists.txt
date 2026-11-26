@@ -30,7 +30,7 @@ if(NOT SCREENSHOT_USE_INSTALLED_CAPTURE)
     ../apps/screenshot/workflow.cpp ../apps/screenshot/launcher.qrc)
   set_target_properties(session-test PROPERTIES AUTORCC ON)
   target_include_directories(session-test PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
-  target_link_libraries(session-test PRIVATE HolonightScreenshot::Capture screenshot-output
+  target_link_libraries(session-test PRIVATE HolonightScreenshot::Capture screenshot-output screenshot-editor
     Qt6::DBus Qt6::Quick Qt6::Test Wayland::Server)
   target_compile_definitions(session-test PRIVATE SCREENSHOT_APP="$<TARGET_FILE:holonight-screenshot>")
   add_dependencies(session-test holonight-screenshot)
@@ -45,3 +45,8 @@ target_link_libraries(launcher-test PRIVATE Qt6::QuickControls2 Qt6::Test)
 add_test(NAME launcher COMMAND launcher-test)
 set_tests_properties(launcher PROPERTIES TIMEOUT 15
   ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORMTHEME=;QT_QUICK_CONTROLS_STYLE=Basic")
+
+add_executable(editor-test editor_test.cpp)
+target_link_libraries(editor-test PRIVATE screenshot-editor Qt6::Test)
+add_test(NAME editor COMMAND editor-test)
+set_tests_properties(editor PROPERTIES TIMEOUT 10 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
