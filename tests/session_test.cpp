@@ -9,6 +9,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileDialog>
+#include <QHash>
 #include <QIcon>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -823,10 +824,6 @@ text_font_size = 36
     fixture.setColorSpace(QColorSpace::DisplayP3);
     fixture.fill(Qt::black);
     document->reset(fixture);
-    document->startCrop();
-    document->begin({10, 10}, 1);
-    document->finish({150, 90});
-    document->applyCrop();
 
     QTRY_VERIFY(qobject_cast<QQuickWindow*>(QGuiApplication::focusWindow()));
     auto* window = qobject_cast<QQuickWindow*>(QGuiApplication::focusWindow());
@@ -834,11 +831,16 @@ text_font_size = 36
     auto* zoom = window->findChild<QQuickItem*>("editor-zoom");
     QVERIFY(canvas && zoom);
 
+    QHash<QString, QQuickItem*> railButtons;
     QSet<QUrl> loadedIcons;
     QList<QQuickItem*> items{window->contentItem()};
     while (!items.isEmpty()) {
       auto* item = items.takeLast();
       items.append(item->childItems());
+      const QString prefix = "editor-rail-";
+      if (item->objectName().startsWith(prefix)) {
+        railButtons.insert(item->objectName().sliced(prefix.size()), item);
+      }
       const auto source = item->property("source").toUrl();
       if (source.scheme() == "qrc" && source.path().startsWith("/screenshot/icons/")) {
         QTRY_COMPARE(item->property("status").toString(), QString("Ready"));
@@ -846,12 +848,84 @@ text_font_size = 36
         loadedIcons.insert(source);
       }
     }
-    const QStringList icons{"select", "pen",   "rectangle", "ellipse",      "arrow", "text", "number",
-                            "blur",   "minus", "plus",      "window-close", "undo",  "redo"};
+    const QStringList icons{"select", "pen",  "rectangle", "ellipse", "arrow",        "text", "number",
+                            "blur",   "crop", "minus",     "plus",    "window-close", "undo", "redo"};
     QCOMPARE(loadedIcons.size(), icons.size());
     for (const auto& name : icons) {
       QVERIFY2(loadedIcons.contains(QUrl("qrc:/screenshot/icons/" + name + ".svg")), qPrintable(name));
     }
+
+    const auto click = [&](QQuickItem* button) {
+      QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier,
+                        button->mapToScene({button->width() / 2, button->height() / 2}).toPoint());
+    };
+    using Document = screenshot::EditorDocument;
+    const QList<std::pair<QString, Document::Tool>> tools{
+        {"select", Document::Select},   {"rectangle", Document::Rectangle},
+        {"ellipse", Document::Ellipse}, {"arrow", Document::Arrow},
+        {"text", Document::Text},       {"number", Document::Number},
+        {"blur", Document::Blur},       {"pen", Document::Pen}};
+    auto* rail = window->findChild<QQuickItem*>("editor-tool-rail");
+    auto* crop = railButtons.value("crop");
+    auto* undo = railButtons.value("undo");
+    auto* redo = railButtons.value("redo");
+    QVERIFY(rail && crop && undo && redo);
+
+    const auto originalSize = window->size();
+    window->resize(1080, 700);
+    QTRY_COMPARE(crop->height(), 44);
+    window->resize(window->minimumSize());
+    QTRY_COMPARE(window->size(), QSize(760, 520));
+    QList<QQuickItem*> buttons;
+    for (const auto& [name, tool] : tools) {
+      auto* button = railButtons.value(name);
+      QVERIFY2(button, qPrintable(name));
+      buttons.append(button);
+      click(button);
+      QCOMPARE(document->tool(), tool);
+      QVERIFY(button->property("selected").toBool());
+      click(button);
+      QVERIFY(button->property("selected").toBool());
+    }
+    buttons.append({crop, undo, redo});
+    qreal previousBottom = 0;
+    for (auto* button : buttons) {
+      QVERIFY(button->isVisible());
+      const auto top = button->mapToItem(rail, {0, 0});
+      QVERIFY(top.y() >= previousBottom);
+      QCOMPARE(top.x(), 8);
+      QCOMPARE(button->width(), 44);
+      QVERIFY(button->height() >= 20);
+      previousBottom = top.y() + button->height();
+      QVERIFY(previousBottom <= rail->height());
+    }
+
+    auto* pen = railButtons.value("pen");
+    QVERIFY(!undo->isEnabled() && !redo->isEnabled());
+    click(crop);
+    QVERIFY(document->cropping());
+    QVERIFY(crop->property("selected").toBool());
+    QVERIFY(!pen->property("selected").toBool());
+    QTRY_VERIFY(redo->mapToItem(rail, {0, redo->height()}).y() <= rail->height());
+    QTest::keyClick(window, Qt::Key_Escape);
+    QVERIFY(!document->cropping());
+    QVERIFY(!crop->property("selected").toBool());
+    QVERIFY(pen->property("selected").toBool());
+
+    click(crop);
+    document->begin({10, 10}, 1);
+    document->finish({150, 90});
+    QTest::keyClick(window, Qt::Key_Return);
+    QVERIFY(!document->cropping());
+    QVERIFY(!crop->property("selected").toBool());
+    QVERIFY(pen->property("selected").toBool());
+    QVERIFY(undo->isEnabled() && !redo->isEnabled());
+    click(undo);
+    QVERIFY(!undo->isEnabled() && redo->isEnabled());
+    click(redo);
+    QVERIFY(undo->isEnabled() && !redo->isEnabled());
+    QCOMPARE(document->crop(), QRect(10, 10, 140, 80));
+    window->resize(originalSize);
 
     document->setTool(screenshot::EditorDocument::Pen);
     document->setPropertyValue("width", 5);

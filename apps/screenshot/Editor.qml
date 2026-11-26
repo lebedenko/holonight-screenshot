@@ -11,7 +11,6 @@ FocusScope {
     readonly property var document: workflow.document
     readonly property var tools: [qsTr("Select"), qsTr("Pen"), qsTr("Rectangle"), qsTr("Ellipse"),
         qsTr("Arrow"), qsTr("Text"), qsTr("Number"), qsTr("Blur")]
-    readonly property list<string> toolIcons: ["select", "pen", "rectangle", "ellipse", "arrow", "text", "number", "blur"]
     readonly property color panelColor: Qt.tint(palette.window, Qt.alpha(palette.buttonText, 0.045))
     readonly property var zoomLevels: [0.125, 0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4]
     property int zoomIndex: 0
@@ -25,6 +24,37 @@ FocusScope {
         display: AbstractButton.IconOnly
         icon.width: 20
         icon.height: 20
+    }
+
+    component RailButton: IconButton {
+        id: button
+        property bool selected: false
+        property bool grouped: false
+
+        objectName: "editor-rail-" + iconName
+        required property string iconName
+        icon.source: "qrc:/screenshot/icons/" + iconName + ".svg"
+        icon.color: selected ? editor.palette.highlightedText : editor.palette.buttonText
+        Accessible.name: text
+        ToolTip.text: text
+        ToolTip.visible: hovered
+
+        background: Rectangle {
+            radius: 8
+            color: {
+                if (button.selected)
+                    return editor.palette.highlight;
+                if (button.enabled && (button.down || button.hovered))
+                    return Qt.tint(editor.palette.button, Qt.alpha(editor.palette.highlight, button.down ? 0.24 : 0.12));
+                return button.grouped ? "transparent" : editor.palette.button;
+            }
+            border.width: button.visualFocus ? 2 : (button.grouped ? 0 : 1)
+            border.color: button.visualFocus
+                ? (button.selected ? editor.palette.highlightedText : editor.palette.highlight)
+                : (button.selected ? editor.palette.highlight : editor.palette.mid)
+        }
+
+        opacity: enabled || selected ? 1 : 0.5
     }
 
     function zoomStep(direction: int) {
@@ -186,39 +216,106 @@ FocusScope {
             Layout.fillHeight: true
             spacing: 6
 
-            ColumnLayout {
-                Layout.alignment: Qt.AlignTop
-                spacing: 3
+            Rectangle {
+                id: rail
+                objectName: "editor-tool-rail"
+                Layout.preferredWidth: 60
+                Layout.fillHeight: true
+                radius: 6
+                color: editor.panelColor
+                border.color: editor.palette.mid
 
-                Repeater {
-                    model: editor.tools
-                    IconButton {
-                        required property int index
-                        required property string modelData
-                        Layout.preferredWidth: 40
-                        Layout.preferredHeight: 34
-                        icon.source: "qrc:/screenshot/icons/" + editor.toolIcons[index] + ".svg"
-                        Accessible.name: modelData
-                        ToolTip.text: modelData
-                        ToolTip.visible: hovered
-                        checkable: true
-                        checked: editor.document.tool === index
-                        enabled: !editor.document.busy
-                        onClicked: editor.document.tool = index
+                readonly property int inset: 8
+                readonly property int buttonCount: annotationButtons.count + historyButtons.children.length + 1
+                readonly property int gapCount: annotationButtons.count + 2
+                readonly property int buttonHeight: Math.max(0, Math.min(44, Math.floor(
+                    (height - 2 * inset - gapCount * railButtons.spacing - divider.height) / buttonCount)))
+
+                Column {
+                    id: railButtons
+                    anchors.top: parent.top
+                    anchors.topMargin: rail.inset
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    width: 44
+                    spacing: 4
+
+                    Repeater {
+                        id: annotationButtons
+                        model: [
+                            { tool: 0, icon: "select" },
+                            { tool: 2, icon: "rectangle" },
+                            { tool: 3, icon: "ellipse" },
+                            { tool: 4, icon: "arrow" },
+                            { tool: 5, icon: "text" },
+                            { tool: 6, icon: "number" },
+                            { tool: 7, icon: "blur" },
+                            { tool: 1, icon: "pen" }
+                        ]
+
+                        RailButton {
+                            required property var modelData
+                            width: railButtons.width
+                            height: rail.buttonHeight
+                            iconName: modelData.icon
+                            text: editor.tools[modelData.tool]
+                            selected: !editor.document.cropping && editor.document.tool === modelData.tool
+                            Accessible.checkable: true
+                            Accessible.checked: selected
+                            enabled: !editor.document.busy
+                            onClicked: editor.document.tool = modelData.tool
+                        }
                     }
-                }
-                ToolSeparator { orientation: Qt.Horizontal }
-                IconButton {
-                    icon.source: "qrc:/screenshot/icons/undo.svg"
-                    Accessible.name: qsTr("Undo")
-                    enabled: editor.document.canUndo
-                    onClicked: editor.document.undo()
-                }
-                IconButton {
-                    icon.source: "qrc:/screenshot/icons/redo.svg"
-                    Accessible.name: qsTr("Redo")
-                    enabled: editor.document.canRedo
-                    onClicked: editor.document.redo()
+
+                    RailButton {
+                        width: railButtons.width
+                        height: rail.buttonHeight
+                        iconName: "crop"
+                        text: qsTr("Crop")
+                        selected: editor.document.cropping
+                        Accessible.checkable: true
+                        Accessible.checked: selected
+                        enabled: !editor.document.busy
+                        onClicked: editor.document.startCrop()
+                    }
+
+                    Rectangle {
+                        id: divider
+                        width: railButtons.width
+                        height: 1
+                        color: editor.palette.mid
+                    }
+
+                    Rectangle {
+                        width: railButtons.width
+                        height: historyButtons.height
+                        radius: 8
+                        color: editor.palette.button
+                        border.color: editor.palette.mid
+
+                        Column {
+                            id: historyButtons
+                            width: parent.width
+
+                            RailButton {
+                                width: historyButtons.width
+                                height: rail.buttonHeight
+                                grouped: true
+                                iconName: "undo"
+                                text: qsTr("Undo")
+                                enabled: editor.document.canUndo
+                                onClicked: editor.document.undo()
+                            }
+                            RailButton {
+                                width: historyButtons.width
+                                height: rail.buttonHeight
+                                grouped: true
+                                iconName: "redo"
+                                text: qsTr("Redo")
+                                enabled: editor.document.canRedo
+                                onClicked: editor.document.redo()
+                            }
+                        }
+                    }
                 }
             }
 
