@@ -63,7 +63,8 @@ void notifyOutput(QObject* context, const QString& title, const QString& error) 
     }
     finished->deleteLater();
   });
-}
+  // The Qt parent also destroys the watcher if the call is still pending at shutdown.
+}  // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
 
 QString applicationName(const QString& appId) {
   if (appId.isEmpty() || appId.contains(u'/')) {
